@@ -159,5 +159,5 @@ MIT — see [LICENSE](https://github.com/arg-sh/argsh/blob/main/LICENSE).
 
 &nbsp;
 
-<p align="center">Copyright &copy; 2024-present <a href="https://github.com/fentas" target="_blank">Jan Guth</a>
+<p align="center">Copyright &copy; 2026-present <a href="https://github.com/fentas" target="_blank">Jan Guth</a>
 <p align="center"><a href="https://github.com/arg-sh/argsh/blob/main/LICENSE"><img src="https://img.shields.io/static/v1.svg?style=for-the-badge&label=License&message=MIT&logoColor=d9e0ee&colorA=302d41&colorB=b7bdf8"/></a></p>
