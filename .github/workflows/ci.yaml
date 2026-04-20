@@ -70,7 +70,6 @@ jobs:
   rust-musl:
     name: Rust (musl-${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    container: alpine:latest
     strategy:
       matrix:
         include:
@@ -80,10 +79,12 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
-      - name: Install build tools
-        run: apk add --no-cache rust cargo musl-dev
-      - name: Build (musl)
-        run: cargo build --release
+      - name: Build in Alpine container
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src alpine:latest sh -c '
+            apk add --no-cache rust cargo musl-dev
+            cargo build --release
+          '
       - name: Upload .so
         uses: actions/upload-artifact@v7
         with:
