@@ -73,7 +73,7 @@ jobs:
         id: check
         run: |
           lib="${{ needs.meta.outputs.lib }}"
-          if [[ -d "${lib}-builtin" ]]; then
+          if [[ -d "${lib}/builtin" ]]; then
             echo "has_builtin=true" >> "${GITHUB_OUTPUT}"
           else
             echo "has_builtin=false" >> "${GITHUB_OUTPUT}"

@@ -45,7 +45,7 @@ Libraries install to `.argsh/libs/` (project-local) or `~/.local/share/argsh/lib
 
 | Library | Description | Version | Builtin |
 |---------|-------------|---------|---------|
-| [`jaml`](jaml/) | Structured data access for YAML/JSON — batch read/write, array iteration, template rendering | 0.1.0 | [`libjaml.so`](jaml-builtin/) |
+| [`jaml`](jaml/) | Structured data access for YAML/JSON — batch read/write, array iteration, template rendering | 0.1.0 | [`libjaml.so`](jaml/builtin/) |
 
 &nbsp;
 
@@ -101,7 +101,7 @@ The Cargo workspace compiles all builtin crates together, sharing dependencies (
 
 | Crate | Output | Size |
 |---|---|---|
-| `jaml-builtin` | `libjaml.so` | ~512K |
+| `jaml/builtin` | `libjaml.so` | ~512K |
 | `shared` | (static lib) | — |
 
 &nbsp;
@@ -110,13 +110,13 @@ The Cargo workspace compiles all builtin crates together, sharing dependencies (
 
 ```text
 <lib>/
+├── README.md           # library documentation
 ├── argsh-plugin.yml    # metadata (name, version, requires)
 ├── <lib>               # executable argsh script (import + CLI)
-└── <lib>.bats          # tests
-
-<lib>-builtin/          # optional Rust builtin
-├── Cargo.toml
-└── src/lib.rs
+├── <lib>.bats          # tests
+└── builtin/            # optional Rust builtin
+    ├── Cargo.toml
+    └── src/lib.rs
 ```
 
 &nbsp;
