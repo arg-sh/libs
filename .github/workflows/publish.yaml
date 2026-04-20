@@ -1,0 +1,223 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      # Per-lib tags: jaml/v0.1.0, http/v0.2.0
+      - "*/v*"
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io/arg-sh/libs
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Stage 1: Parse the tag to extract lib name and version.
+  # Tag format: <lib>/v<version> (e.g. jaml/v0.1.0)
+  # ═══════════════════════════════════════════════════════════════════════
+  meta:
+    name: Parse tag
+    runs-on: ubuntu-latest
+    outputs:
+      lib: ${{ steps.parse.outputs.lib }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - name: Parse tag
+        id: parse
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          lib="${tag%%/*}"
+          version="${tag#*/v}"
+          echo "lib=${lib}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "Library: ${lib}, Version: ${version}"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Stage 2: Build Rust builtins for all platforms (if the lib has one).
+  # ═══════════════════════════════════════════════════════════════════════
+  build:
+    name: Build ${{ matrix.variant }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    needs: [meta]
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            variant: linux
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            variant: linux
+          - arch: amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            variant: linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: linux-musl
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check if lib has a builtin
+        id: check
+        run: |
+          lib="${{ needs.meta.outputs.lib }}"
+          if [[ -d "${lib}-builtin" ]]; then
+            echo "has_builtin=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_builtin=false" >> "${GITHUB_OUTPUT}"
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.check.outputs.has_builtin == 'true'
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        if: steps.check.outputs.has_builtin == 'true'
+        with:
+          shared-key: publish-${{ matrix.variant }}-${{ matrix.arch }}
+      - name: Install musl tools
+        if: steps.check.outputs.has_builtin == 'true' && contains(matrix.target, 'musl')
+        run: sudo apt-get install -y musl-tools
+      - name: Build
+        if: steps.check.outputs.has_builtin == 'true'
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Rename .so with platform suffix
+        if: steps.check.outputs.has_builtin == 'true'
+        run: |
+          lib="${{ needs.meta.outputs.lib }}"
+          src="target/${{ matrix.target }}/release/lib${lib}.so"
+          dst="${lib}-${{ matrix.variant }}-${{ matrix.arch }}.so"
+          cp "${src}" "${dst}"
+      - name: Upload .so
+        if: steps.check.outputs.has_builtin == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: so-${{ matrix.variant }}-${{ matrix.arch }}
+          if-no-files-found: ignore
+          retention-days: 1
+          path: "*.so"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Stage 3: Bundle bash + .so files and publish as OCI artifact + GitHub release.
+  # ═══════════════════════════════════════════════════════════════════════
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    needs: [meta, build]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all .so artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: so-*
+          path: so-artifacts
+          merge-multiple: true
+
+      - name: Assemble release bundle
+        run: |
+          lib="${{ needs.meta.outputs.lib }}"
+          version="${{ needs.meta.outputs.version }}"
+          mkdir -p bundle
+
+          # Copy bash files
+          for f in "${lib}"/*; do
+            [[ -f "${f}" ]] || continue
+            cp "${f}" "bundle/"
+          done
+
+          # Copy platform .so files (if any)
+          if compgen -G "so-artifacts/*.so" > /dev/null 2>&1; then
+            cp so-artifacts/*.so bundle/
+          fi
+
+          # Create tarball for GitHub release
+          tar czf "${lib}-${version}.tar.gz" -C bundle .
+
+          echo "=== Bundle contents ==="
+          ls -la bundle/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          lib="${{ needs.meta.outputs.lib }}"
+          version="${{ needs.meta.outputs.version }}"
+          tag="${GITHUB_REF_NAME}"
+
+          # Create release with tarball
+          cd bundle
+          sha256sum * > sha256sum.txt
+          cd ..
+
+          gh release create "${tag}" \
+            --title "${lib} v${version}" \
+            --generate-notes \
+            "${lib}-${version}.tar.gz" \
+            bundle/sha256sum.txt
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push OCI artifact
+        run: |
+          lib="${{ needs.meta.outputs.lib }}"
+          version="${{ needs.meta.outputs.version }}"
+          ref="${{ env.REGISTRY }}/${lib}:${version}"
+          ref_latest="${{ env.REGISTRY }}/${lib}:latest"
+
+          # Use ORAS to push each file as a separate layer
+          # Install oras CLI
+          curl -sL https://github.com/oras-project/oras/releases/download/v1.2.2/oras_1.2.2_linux_amd64.tar.gz \
+            | tar xz -C /usr/local/bin oras
+
+          # Build the push command with typed layers
+          pushargs=()
+          for f in bundle/*; do
+            [[ -f "${f}" ]] || continue
+            name="$(basename "${f}")"
+            case "${name}" in
+              *.sh|*.bash)
+                pushargs+=("${f}:application/vnd.argsh.lib.v1+bash")
+                ;;
+              *.yml|*.yaml)
+                pushargs+=("${f}:application/vnd.argsh.plugin.v1+yaml")
+                ;;
+              *.so)
+                pushargs+=("${f}:application/vnd.argsh.builtin.v1+so")
+                ;;
+              *.bats)
+                pushargs+=("${f}:application/vnd.argsh.test.v1+bats")
+                ;;
+              sha256sum.txt)
+                # skip checksum file from OCI
+                continue
+                ;;
+              *)
+                # Extensionless files (like jaml executable) → bash
+                pushargs+=("${f}:application/vnd.argsh.lib.v1+bash")
+                ;;
+            esac
+          done
+
+          echo "Pushing ${ref}..."
+          oras push "${ref}" "${pushargs[@]}"
+
+          echo "Tagging ${ref_latest}..."
+          oras tag "${ref}" "${version}" "latest"
+
+          echo "=== Manifest ==="
+          oras manifest fetch "${ref}" | jq .
