@@ -13,10 +13,11 @@
 
 main() {
   local -a usage=(
-    'get'   'Read fields from a YAML/JSON file'
-    'set'   'Write fields to a YAML/JSON file'
-    'each'  'Iterate array elements'
-    'merge' 'Deep merge files'
+    'get'    'Read fields from a YAML/JSON file'
+    'set'    'Write fields to a YAML/JSON file'
+    'each'   'Iterate array elements'
+    'merge'  'Deep merge files'
+    'render' 'Render template with data context'
   )
   :usage "Structured data access for YAML/JSON" "${@}"
   "${usage[@]}"
@@ -182,15 +183,75 @@ jaml::each() {
       fi
     done
 
-    local _yq_fields="" _f
+    # Detect if any field uses ^ parent access
+    local _has_parent=0
+    local _f
     for _f in "${_fields[@]}"; do
-      [[ -z "${_yq_fields}" ]] || _yq_fields+=", "
-      _yq_fields+="(${_f} // \"\")"
+      if [[ "${_f}" == "^"* ]]; then
+        _has_parent=1
+        break
+      fi
     done
 
     local _src="${_file}"
     [[ "${_file}" != "-" ]] || _src="/dev/stdin"
-    __JAML_EACH_LINES=$(yq -r "${_path} | [${_yq_fields}] | @tsv" "${_src}")
+
+    if (( _has_parent )); then
+      # Split the path at [] to find nesting segments
+      # e.g. '.items[].spec.containers[]' → ('.items' '.spec.containers')
+      local _remaining="${_path}"
+      local -a _segments=()
+      while [[ "${_remaining}" == *"[]"* ]]; do
+        local _seg="${_remaining%%\[\]*}"
+        _segments+=("${_seg}")
+        _remaining="${_remaining#*\[\]}"
+      done
+
+      local _nesting=${#_segments[@]}
+
+      # Build yq expression with as $pN bindings
+      # Innermost iteration is the last segment; parents are outer segments
+      # $p1 = one level up (parent), $p2 = two levels up, etc.
+      local _yq_expr=""
+      local _i
+      for (( _i=0; _i < _nesting; _i++ )); do
+        # Depth from innermost: segment 0 is (nesting-1) levels up
+        local _depth_from_inner=$(( _nesting - 1 - _i ))
+        if (( _i == 0 )); then
+          _yq_expr="${_segments[_i]}[]"
+        else
+          _yq_expr+="${_segments[_i]}[]"
+        fi
+        # Bind parent variable for all but the innermost
+        if (( _depth_from_inner > 0 )); then
+          _yq_expr+=" as \$p${_depth_from_inner} | \$p${_depth_from_inner}"
+        fi
+      done
+
+      # Build field list, replacing ^.field with $pN.field
+      local _yq_fields=""
+      for _f in "${_fields[@]}"; do
+        [[ -z "${_yq_fields}" ]] || _yq_fields+=", "
+        if [[ "${_f}" == "^"* ]]; then
+          local _carets="${_f%%[!^]*}"
+          local _depth=${#_carets}
+          local _field_path="${_f#${_carets}}"
+          _yq_fields+="\$p${_depth}${_field_path}"
+        else
+          _yq_fields+="(${_f} // \"\")"
+        fi
+      done
+
+      __JAML_EACH_LINES=$(yq -r "${_yq_expr} | [${_yq_fields}] | @tsv" "${_src}")
+    else
+      local _yq_fields=""
+      for _f in "${_fields[@]}"; do
+        [[ -z "${_yq_fields}" ]] || _yq_fields+=", "
+        _yq_fields+="(${_f} // \"\")"
+      done
+      __JAML_EACH_LINES=$(yq -r "${_path} | [${_yq_fields}] | @tsv" "${_src}")
+    fi
+
     __JAML_EACH_IDX=0
     __JAML_EACH_FILE="${_file}"
     __JAML_EACH_PATH="${_path}"
@@ -250,6 +311,48 @@ main::each() {
     echo "${_headers}"
     yq -r "${path} | [${_fields}] | @tsv" "${_src}"
   fi
+}
+
+# ── jaml::render ────────────────────────────────────────
+
+# @description Render a template file using values from a data file.
+#   Supports {{ .path.to.value }} placeholders (yq expressions).
+# @arg $1 string Template file
+# @arg $2 string Data file (YAML/JSON)
+# @stdout Rendered template
+# @example
+#   jaml::render deployment.tmpl.yaml config.yaml
+jaml::render() {
+  local _template="${1}" _data="${2}"
+  [[ $# -ge 2 ]] || { echo "jaml::render: usage: jaml::render <template> <data>" >&2; return 1; }
+
+  local _content
+  _content="$(cat "${_template}")"
+
+  # Find all {{ .expr }} patterns and replace them
+  local _result="${_content}"
+  local _match _expr _val
+  while [[ "${_result}" =~ \{\{[[:space:]]*([^}]+)[[:space:]]*\}\} ]]; do
+    _match="${BASH_REMATCH[0]}"
+    _expr="${BASH_REMATCH[1]}"
+    _expr="${_expr#"${_expr%%[![:space:]]*}"}"  # trim leading
+    _expr="${_expr%"${_expr##*[![:space:]]}"}"  # trim trailing
+    _val="$(yq -r "${_expr} // \"\"" "${_data}")"
+    _result="${_result//"${_match}"/"${_val}"}"
+  done
+
+  echo "${_result}"
+}
+
+# CLI wrapper
+main::render() {
+  local template data
+  local -a args=(
+    'template' 'Template file'
+    'data'     'Data file (YAML/JSON)'
+  )
+  :args "Render template with data context" "${@}"
+  jaml::render "${template}" "${data}"
 }
 
 # ── jaml::merge ─────────────────────────────────────────

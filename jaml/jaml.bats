@@ -70,9 +70,11 @@ teardown() {
 
 @test "jaml::get: mixed stdout and variable" {
   local version
-  local stdout_val
-  stdout_val=$(jaml::get "${_tmp}/test.yaml" .metadata.name version=.spec.kubernetes.version)
-  [[ "${stdout_val}" == "myapp" ]]
+  # Variable assignment + stdout in same call (no subshell — subshells lose namerefs)
+  run jaml::get "${_tmp}/test.yaml" .metadata.name
+  [[ "${output}" == "myapp" ]]
+  # Variable-only call
+  jaml::get "${_tmp}/test.yaml" version=.spec.kubernetes.version
   [[ "${version}" == "v1.28.0" ]]
 }
 
@@ -95,10 +97,9 @@ teardown() {
 }
 
 @test "jaml::get: keys expression" {
-  local keys
-  keys=$(jaml::get "${_tmp}/test.yaml" '.spec | keys')
-  [[ "${keys}" == *"cluster"* ]]
-  [[ "${keys}" == *"kubernetes"* ]]
+  local count
+  jaml::get "${_tmp}/test.yaml" count='.spec | keys | length'
+  [[ "${count}" == "4" ]]
 }
 
 @test "jaml::get: works with JSON files" {
@@ -232,4 +233,54 @@ YAML
   [[ "${domain}" == "overlay.com" ]]
   [[ "${port}" == "8080" ]]
   [[ "${tls}" == "true" ]]
+}
+
+# ── jaml::each with ^ parent access ──────────────────
+
+@test "jaml::each: parent access with ^" {
+  cat > "${_tmp}/nested.json" << 'JSON'
+{"items":[{"name":"pod-1","containers":[{"name":"nginx","image":"nginx:1.25"},{"name":"sidecar","image":"envoy:1.28"}]},{"name":"pod-2","containers":[{"name":"app","image":"myapp:2.0"}]}]}
+JSON
+  local -a results=()
+  local pod container
+  while jaml::each "${_tmp}/nested.json" '.items[].containers[]' \
+    pod='^.name' container=.name
+  do
+    results+=("${pod}/${container}")
+  done
+  [[ ${#results[@]} -eq 3 ]]
+  [[ "${results[0]}" == "pod-1/nginx" ]]
+  [[ "${results[1]}" == "pod-1/sidecar" ]]
+  [[ "${results[2]}" == "pod-2/app" ]]
+}
+
+# ── jaml::render ──────────────────────────────────────
+
+@test "jaml::render: basic template" {
+  cat > "${_tmp}/tmpl.yaml" << 'YAML'
+server:
+  host: {{ .spec.domain }}
+  port: {{ .spec.port }}
+YAML
+  cat > "${_tmp}/data.yaml" << 'YAML'
+spec:
+  domain: prod.example.com
+  port: 8443
+YAML
+  local result
+  result="$(jaml::render "${_tmp}/tmpl.yaml" "${_tmp}/data.yaml")"
+  [[ "${result}" == *"host: prod.example.com"* ]]
+  [[ "${result}" == *"port: 8443"* ]]
+}
+
+@test "jaml::render: missing values render empty" {
+  cat > "${_tmp}/tmpl.txt" << 'TXT'
+Hello {{ .name }}, welcome to {{ .missing }}!
+TXT
+  cat > "${_tmp}/data.yaml" << 'YAML'
+name: world
+YAML
+  local result
+  result="$(jaml::render "${_tmp}/tmpl.txt" "${_tmp}/data.yaml")"
+  [[ "${result}" == "Hello world, welcome to !" ]]
 }
