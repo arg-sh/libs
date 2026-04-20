@@ -46,6 +46,7 @@ jobs:
     name: Build ${{ matrix.variant }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     needs: [meta]
+    container: ${{ matrix.container || '' }}
     strategy:
       matrix:
         include:
@@ -59,44 +60,54 @@ jobs:
             variant: linux
           - arch: amd64
             runner: ubuntu-latest
-            target: x86_64-unknown-linux-musl
             variant: linux-musl
+            container: alpine:latest
           - arch: arm64
             runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
             variant: linux-musl
+            container: alpine:latest
     steps:
       - uses: actions/checkout@v6
       - name: Check if lib has a builtin
         id: check
         run: |
           lib="${{ needs.meta.outputs.lib }}"
-          if [[ -d "${lib}-builtin" ]]; then
+          if [ -d "${lib}-builtin" ]; then
             echo "has_builtin=true" >> "${GITHUB_OUTPUT}"
           else
             echo "has_builtin=false" >> "${GITHUB_OUTPUT}"
           fi
+      # glibc builds
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.check.outputs.has_builtin == 'true'
+        if: steps.check.outputs.has_builtin == 'true' && !matrix.container
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-        if: steps.check.outputs.has_builtin == 'true'
+        if: steps.check.outputs.has_builtin == 'true' && !matrix.container
         with:
           shared-key: publish-${{ matrix.variant }}-${{ matrix.arch }}
-      - name: Install musl tools
-        if: steps.check.outputs.has_builtin == 'true' && contains(matrix.target, 'musl')
-        run: sudo apt-get install -y musl-tools
-      - name: Build
-        if: steps.check.outputs.has_builtin == 'true'
+      - name: Build (glibc)
+        if: steps.check.outputs.has_builtin == 'true' && !matrix.container
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Rename .so with platform suffix
-        if: steps.check.outputs.has_builtin == 'true'
+      - name: Rename .so (glibc)
+        if: steps.check.outputs.has_builtin == 'true' && !matrix.container
         run: |
           lib="${{ needs.meta.outputs.lib }}"
-          src="target/${{ matrix.target }}/release/lib${lib}.so"
-          dst="${lib}-${{ matrix.variant }}-${{ matrix.arch }}.so"
-          cp "${src}" "${dst}"
+          cp "target/${{ matrix.target }}/release/lib${lib}.so" \
+             "${lib}-${{ matrix.variant }}-${{ matrix.arch }}.so"
+      # musl builds (Alpine container)
+      - name: Install build tools (musl)
+        if: steps.check.outputs.has_builtin == 'true' && matrix.container
+        run: apk add --no-cache rust cargo musl-dev
+      - name: Build (musl)
+        if: steps.check.outputs.has_builtin == 'true' && matrix.container
+        run: cargo build --release
+      - name: Rename .so (musl)
+        if: steps.check.outputs.has_builtin == 'true' && matrix.container
+        run: |
+          lib="${{ needs.meta.outputs.lib }}"
+          cp "target/release/lib${lib}.so" \
+             "${lib}-${{ matrix.variant }}-${{ matrix.arch }}.so"
       - name: Upload .so
         if: steps.check.outputs.has_builtin == 'true'
         uses: actions/upload-artifact@v7
