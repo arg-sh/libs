@@ -43,9 +43,9 @@ Libraries install to `.argsh/libs/` (project-local) or `~/.local/share/argsh/lib
 
 ### 📚 Libraries
 
-| Library | Description | Builtin |
-|---|---|---|
-| [jaml](jaml/) | Structured data access for YAML/JSON | [Yes](jaml-builtin/) |
+| Library | Description | Version | Builtin |
+|---------|-------------|---------|---------|
+| [`jaml`](jaml/) | Structured data access for YAML/JSON — batch read/write, array iteration, template rendering | 0.1.0 | [`libjaml.so`](jaml-builtin/) |
 
 &nbsp;
 
