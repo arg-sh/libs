@@ -20,6 +20,8 @@ jaml::get config.yaml domain=.spec.cluster.domain
 
 # Use as CLI (executable)
 argsh run jaml get config.yaml .spec.domain
+# or execute directly
+.argsh/libs/jaml/jaml set config.yaml .spec.domain="example.com"
 ```
 
 ## Structure

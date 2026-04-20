@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "tool": {
+    "b": "v4.16.0"
+  },
+  "timestamp": "2026-04-20T19:58:13Z",
+  "binaries": [
+    {
+      "name": "b",
+      "version": "v4.16.0",
+      "sha256": "1b255cad2f69143a520c827b2df64f5d243bf0e24998bd421acffa6ed5f40abf",
+      "source": "github.com/fentas/b",
+      "preset": true
+    },
+    {
+      "name": "argsh",
+      "version": "v0.8.4",
+      "sha256": "90ad93d5b2f077e2bf1bbe5dd3243f4efdb1c78f578778a3173614eb877adb0e",
+      "source": "github.com/arg-sh/argsh",
+      "preset": true
+    },
+    {
+      "name": "jq",
+      "version": "jq-1.8.1",
+      "sha256": "020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d",
+      "source": "github.com/jqlang/jq",
+      "preset": true
+    },
+    {
+      "name": "yq",
+      "version": "v4.53.2",
+      "sha256": "d56bf5c6819e8e696340c312bd70f849dc1678a7cda9c2ad63eebd906371d56b",
+      "source": "github.com/mikefarah/yq",
+      "preset": true
+    }
+  ]
+}
