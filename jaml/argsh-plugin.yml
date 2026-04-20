@@ -1,4 +1,4 @@
-name: data
+name: jaml
 version: 0.1.0
 description: Structured data access for YAML/JSON
 requires:

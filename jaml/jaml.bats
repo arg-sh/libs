@@ -2,7 +2,7 @@
 # shellcheck shell=bash disable=SC2034
 
 setup() {
-  source "${BATS_TEST_DIRNAME}/data.sh"
+  source "${BATS_TEST_DIRNAME}/jaml"
   _tmp="$(mktemp -d)"
   cat > "${_tmp}/test.yaml" << 'YAML'
 metadata:
@@ -43,23 +43,23 @@ teardown() {
   rm -rf "${_tmp}"
 }
 
-# ── data::get ──────────────────────────────────────────
+# ── jaml::get ──────────────────────────────────────────
 
-@test "data::get: single value to variable" {
+@test "jaml::get: single value to variable" {
   local domain
-  data::get "${_tmp}/test.yaml" domain=.spec.cluster.domain
+  jaml::get "${_tmp}/test.yaml" domain=.spec.cluster.domain
   [[ "${domain}" == "prod.example.com" ]]
 }
 
-@test "data::get: single value to stdout" {
+@test "jaml::get: single value to stdout" {
   local result
-  result=$(data::get "${_tmp}/test.yaml" .spec.cluster.domain)
+  result=$(jaml::get "${_tmp}/test.yaml" .spec.cluster.domain)
   [[ "${result}" == "prod.example.com" ]]
 }
 
-@test "data::get: batch read (multiple variables)" {
+@test "jaml::get: batch read (multiple variables)" {
   local domain version namespace
-  data::get "${_tmp}/test.yaml" \
+  jaml::get "${_tmp}/test.yaml" \
     domain=.spec.cluster.domain \
     version=.spec.kubernetes.version \
     namespace=.spec.cluster.namespace
@@ -68,71 +68,71 @@ teardown() {
   [[ "${namespace}" == "default" ]]
 }
 
-@test "data::get: mixed stdout and variable" {
+@test "jaml::get: mixed stdout and variable" {
   local version
   local stdout_val
-  stdout_val=$(data::get "${_tmp}/test.yaml" .metadata.name version=.spec.kubernetes.version)
+  stdout_val=$(jaml::get "${_tmp}/test.yaml" .metadata.name version=.spec.kubernetes.version)
   [[ "${stdout_val}" == "myapp" ]]
   [[ "${version}" == "v1.28.0" ]]
 }
 
-@test "data::get: with default value (// operator)" {
+@test "jaml::get: with default value (// operator)" {
   local missing
-  data::get "${_tmp}/test.yaml" missing='.spec.nonexistent // "fallback"'
+  jaml::get "${_tmp}/test.yaml" missing='.spec.nonexistent // "fallback"'
   [[ "${missing}" == "fallback" ]]
 }
 
-@test "data::get: null returns empty string" {
+@test "jaml::get: null returns empty string" {
   local val
-  data::get "${_tmp}/test.yaml" val=.spec.nonexistent
+  jaml::get "${_tmp}/test.yaml" val=.spec.nonexistent
   [[ "${val}" == "" ]]
 }
 
-@test "data::get: length expression" {
+@test "jaml::get: length expression" {
   local count
-  data::get "${_tmp}/test.yaml" count='.spec.nodes.extraMounts | length'
+  jaml::get "${_tmp}/test.yaml" count='.spec.nodes.extraMounts | length'
   [[ "${count}" == "2" ]]
 }
 
-@test "data::get: keys expression" {
+@test "jaml::get: keys expression" {
   local keys
-  keys=$(data::get "${_tmp}/test.yaml" '.spec | keys')
+  keys=$(jaml::get "${_tmp}/test.yaml" '.spec | keys')
   [[ "${keys}" == *"cluster"* ]]
   [[ "${keys}" == *"kubernetes"* ]]
 }
 
-@test "data::get: works with JSON files" {
+@test "jaml::get: works with JSON files" {
   local name
-  data::get "${_tmp}/test.json" name='.items[0].name'
+  jaml::get "${_tmp}/test.json" name='.items[0].name'
   [[ "${name}" == "pod-1" ]]
 }
 
-@test "data::get: stdin support" {
+@test "jaml::get: stdin support" {
   local name
-  name=$(cat "${_tmp}/test.json" | data::get - '.items[0].name')
+  name=$(cat "${_tmp}/test.json" | jaml::get - '.items[0].name')
   [[ "${name}" == "pod-1" ]]
 }
 
-@test "data::get: numeric values" {
+@test "jaml::get: numeric values" {
   local cp workers
-  data::get "${_tmp}/test.yaml" cp=.spec.nodes.controlPlane workers=.spec.nodes.workers
+  jaml::get "${_tmp}/test.yaml" cp=.spec.nodes.controlPlane workers=.spec.nodes.workers
   [[ "${cp}" == "3" ]]
   [[ "${workers}" == "5" ]]
 }
 
-# ── data::set ──────────────────────────────────────────
+# ── jaml::set ──────────────────────────────────────────
 
-@test "data::set: scalar value" {
+@test "jaml::set: scalar value" {
   local domain="staging.example.com"
-  data::set "${_tmp}/test.yaml" .spec.cluster.domain=domain
+  jaml::set "${_tmp}/test.yaml" .spec.cluster.domain=domain
   local result
   result=$(yq -r '.spec.cluster.domain' "${_tmp}/test.yaml")
   [[ "${result}" == "staging.example.com" ]]
 }
 
-@test "data::set: indexed array" {
+@test "jaml::set: indexed array" {
   local -a servers=(10.0.0.10 10.0.0.11)
-  data::set "${_tmp}/test.yaml" .spec.dns.servers=servers
+  jaml::set "${_tmp}/test.yaml" .spec.dns.servers=servers
   local count
   count=$(yq -r '.spec.dns.servers | length' "${_tmp}/test.yaml")
   [[ "${count}" == "2" ]]
@@ -141,25 +141,25 @@ teardown() {
   [[ "${first}" == "10.0.0.10" ]]
 }
 
-@test "data::set: associative array (object)" {
+@test "jaml::set: associative array (object)" {
   local -A labels=(["env"]="prod" ["team"]="infra")
-  data::set "${_tmp}/test.yaml" .metadata.labels=labels
+  jaml::set "${_tmp}/test.yaml" .metadata.labels=labels
   local env
   env=$(yq -r '.metadata.labels.env' "${_tmp}/test.yaml")
   [[ "${env}" == "prod" ]]
 }
 
-@test "data::set: append to array" {
+@test "jaml::set: append to array" {
   local new_server="10.0.0.99"
-  data::set "${_tmp}/test.yaml" '.spec.dns.servers[]=new_server'
+  jaml::set "${_tmp}/test.yaml" '.spec.dns.servers[]=new_server'
   local count
   count=$(yq -r '.spec.dns.servers | length' "${_tmp}/test.yaml")
   [[ "${count}" == "3" ]]
 }
 
-@test "data::set: multiple fields at once" {
+@test "jaml::set: multiple fields at once" {
   local domain="new.example.com" namespace="staging"
-  data::set "${_tmp}/test.yaml" \
+  jaml::set "${_tmp}/test.yaml" \
     .spec.cluster.domain=domain \
     .spec.cluster.namespace=namespace
   local d n
@@ -169,12 +169,12 @@ teardown() {
   [[ "${n}" == "staging" ]]
 }
 
-# ── data::each ───────────────────────────────────────��─
+# ── jaml::each ───────────────────────────────────────��─
 
-@test "data::each: iterate yaml array" {
+@test "jaml::each: iterate yaml array" {
   local -a hosts=() containers=()
   local hostPath containerPath
-  while data::each "${_tmp}/test.yaml" '.spec.nodes.extraMounts[]' \
+  while jaml::each "${_tmp}/test.yaml" '.spec.nodes.extraMounts[]' \
     hostPath=.hostPath containerPath=.containerPath
   do
     hosts+=("${hostPath}")
@@ -185,10 +185,10 @@ teardown() {
   [[ "${containers[1]}" == "/var/log" ]]
 }
 
-@test "data::each: iterate json array" {
+@test "jaml::each: iterate json array" {
   local -a names=() nodes=()
   local name node
-  while data::each "${_tmp}/test.json" '.items[]' \
+  while jaml::each "${_tmp}/test.json" '.items[]' \
     name=.name node=.node
   do
     names+=("${name}")
@@ -199,10 +199,10 @@ teardown() {
   [[ "${nodes[2]}" == "worker-1" ]]
 }
 
-@test "data::each: process substitution" {
+@test "jaml::each: process substitution" {
   local -a names=()
   local name
-  while data::each <(echo '{"items":[{"n":"a"},{"n":"b"}]}') '.items[]' name=.n; do
+  while jaml::each <(echo '{"items":[{"n":"a"},{"n":"b"}]}') '.items[]' name=.n; do
     names+=("${name}")
   done
   [[ ${#names[@]} -eq 2 ]]
@@ -210,9 +210,9 @@ teardown() {
   [[ "${names[1]}" == "b" ]]
 }
 
-# ── data::merge ────────────────────────────────────────
+# ── jaml::merge ────────────────────────────────────────
 
-@test "data::merge: deep merge two files" {
+@test "jaml::merge: deep merge two files" {
   cat > "${_tmp}/base.yaml" << 'YAML'
 spec:
   domain: base.com
@@ -224,7 +224,7 @@ spec:
   tls: true
 YAML
   local result
-  result=$(data::merge "${_tmp}/base.yaml" "${_tmp}/overlay.yaml")
+  result=$(jaml::merge "${_tmp}/base.yaml" "${_tmp}/overlay.yaml")
   local domain port tls
   domain=$(echo "${result}" | yq -r '.spec.domain')
   port=$(echo "${result}" | yq -r '.spec.port')

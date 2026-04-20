@@ -6,27 +6,30 @@ Official plugin libraries for [argsh](https://github.com/arg-sh/argsh).
 
 | Library | Description | Builtin |
 |---------|-------------|---------|
-| [data](data/) | Structured data access for YAML/JSON | Planned |
+| [jaml](jaml/) | Structured data access for YAML/JSON | Planned |
 
 ## Usage
 
 ```bash
 # Add to your project
-argsh lib add argsh@data
+argsh lib add jaml
 
-# Use in scripts
-import data
-data::get config.yaml domain=.spec.cluster.domain
+# Use as library (import)
+import jaml
+jaml::get config.yaml domain=.spec.cluster.domain
+
+# Use as CLI (executable)
+argsh run jaml get config.yaml .spec.domain
 ```
 
 ## Structure
 
-Each library is self-contained:
+Each library is both an importable library and a standalone executable:
 
 ```text
 <lib>/
 ├── argsh-plugin.yml    # metadata
-├── <lib>.sh            # bash library
+├── <lib>               # executable argsh script (import + CLI)
 ├── <lib>.bats          # tests
 └── src/                # optional Rust builtin
     ├── Cargo.toml
@@ -37,10 +40,10 @@ Each library is self-contained:
 
 ```bash
 # Run tests for a specific lib
-bats data/data.bats
+bats jaml/jaml.bats
 
 # Run all tests
-bats *//*.bats
+bats */*.bats
 ```
 
 ## Publishing
