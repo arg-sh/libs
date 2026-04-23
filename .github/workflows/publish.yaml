@@ -197,12 +197,14 @@ jobs:
           curl -sL https://github.com/oras-project/oras/releases/download/v1.2.2/oras_1.2.2_linux_amd64.tar.gz \
             | tar xz -C /usr/local/bin oras
 
-          # Build the push command with typed layers
+          # Build the push command with typed layers.
+          # Run from inside bundle/ so oras uses bare filenames (not bundle/foo)
+          # in the org.opencontainers.image.title annotation.
+          pushd bundle > /dev/null
           pushargs=()
-          for f in bundle/*; do
+          for f in *; do
             [[ -f "${f}" ]] || continue
-            name="$(basename "${f}")"
-            case "${name}" in
+            case "${f}" in
               *.sh|*.bash)
                 pushargs+=("${f}:application/vnd.argsh.lib.v1+bash")
                 ;;
@@ -216,11 +218,9 @@ jobs:
                 pushargs+=("${f}:application/vnd.argsh.test.v1+bats")
                 ;;
               sha256sum.txt)
-                # skip checksum file from OCI
                 continue
                 ;;
               *)
-                # Extensionless files (like jaml executable) → bash
                 pushargs+=("${f}:application/vnd.argsh.lib.v1+bash")
                 ;;
             esac
@@ -228,6 +228,7 @@ jobs:
 
           echo "Pushing ${ref}..."
           oras push "${ref}" "${pushargs[@]}"
+          popd > /dev/null
 
           echo "Tagging ${ref_latest}..."
           oras tag "${ref}" "${version}" "latest"
