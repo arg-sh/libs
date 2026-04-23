@@ -44,10 +44,10 @@ source argsh
 import shell-op
 
 shell-op::kubernetes "watch-pods" \
-  kind=Pod apiVersion=v1 \
-  events=Added \
-  labels="app=myapp" \
-  jqFilter='.metadata.name'
+  --kind Pod --api-version v1 \
+  --events Added \
+  --labels "app=myapp" \
+  --jq-filter '.metadata.name'
 
 pod::added() {
   local name
@@ -65,28 +65,28 @@ shell-op::run "${@}"
 
 ```bash
 shell-op::kubernetes "watch-deploys" \
-  kind=Deployment \
-  apiVersion=apps/v1 \
-  events=Added,Modified,Deleted \
-  labels="app=web,tier=frontend" \
-  fields="status.phase=Running" \
-  jqFilter='.metadata.name' \
-  namespace=production
+  --kind Deployment \
+  --api-version apps/v1 \
+  --events Added,Modified,Deleted \
+  --labels "app=web,tier=frontend" \
+  --fields "status.phase=Running" \
+  --jq-filter '.metadata.name' \
+  --namespace production
 ```
 
-All parameters except `kind` are optional.
+All flags except `--kind` are optional. Every binding function supports `--help`.
 
 ### `shell-op::schedule` — cron triggers
 
 ```bash
-shell-op::schedule "every-5m" "*/5 * * * *"
-shell-op::schedule "hourly" "0 * * * *"
+shell-op::schedule "every-5m" --crontab "*/5 * * * *"
+shell-op::schedule "hourly" --crontab "0 * * * *"
 ```
 
 ### `shell-op::startup` — run at operator start
 
 ```bash
-shell-op::startup 10  # order parameter (default: 1)
+shell-op::startup --order 10  # default: 1
 ```
 
 ## Event routing
@@ -160,7 +160,7 @@ shell-op/
 ├── README.md           # this file
 ├── argsh-plugin.yml    # metadata
 ├── shell-op            # bash library + CLI executable
-└── shell-op.bats       # tests (27 tests)
+└── shell-op.bats       # tests (32 tests)
 ```
 
 ## License

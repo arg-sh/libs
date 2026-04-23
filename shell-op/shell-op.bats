@@ -2,6 +2,7 @@
 # shellcheck shell=bash disable=SC2034
 
 setup() {
+  source argsh
   source "${BATS_TEST_DIRNAME}/shell-op"
   _tmp="$(mktemp -d)"
 
@@ -27,7 +28,7 @@ teardown() {
 # ── shell-op::kubernetes ───────────────────────────────
 
 @test "kubernetes: minimal binding with kind only" {
-  shell-op::kubernetes "watch-pods" kind=Pod
+  shell-op::kubernetes "watch-pods" --kind Pod
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].name')" == "watch-pods" ]]
@@ -36,11 +37,11 @@ teardown() {
 
 @test "kubernetes: full binding with all options" {
   shell-op::kubernetes "watch-deploys" \
-    kind=Deployment apiVersion=apps/v1 \
-    events=Added,Modified \
-    labels="app=web,tier=frontend" \
-    jqFilter='.metadata.name' \
-    namespace=production
+    --kind Deployment --api-version apps/v1 \
+    --events Added,Modified \
+    --labels "app=web,tier=frontend" \
+    --jq-filter '.metadata.name' \
+    --namespace production
 
   local config
   config="$(shell-op::config)"
@@ -56,21 +57,29 @@ teardown() {
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].namespace.nameSelector.matchNames[0]')" == "production" ]]
 }
 
-@test "kubernetes: missing kind fails" {
-  run shell-op::kubernetes "bad" apiVersion=v1
-  [[ "${status}" -ne 0 ]]
-  [[ "${output}" == *"kind= is required"* ]]
+@test "kubernetes: short flags" {
+  shell-op::kubernetes "watch" -k Pod -a v1 -e Added -n default
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].kind')" == "Pod" ]]
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].apiVersion')" == "v1" ]]
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].executeHookOnEvent[0]')" == "Added" ]]
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].namespace.nameSelector.matchNames[0]')" == "default" ]]
 }
 
-@test "kubernetes: unknown key fails" {
-  run shell-op::kubernetes "bad" kind=Pod foo=bar
+@test "kubernetes: missing kind fails" {
+  run shell-op::kubernetes "bad" --api-version v1
   [[ "${status}" -ne 0 ]]
-  [[ "${output}" == *"unknown key"* ]]
+}
+
+@test "kubernetes: unknown flag fails" {
+  run shell-op::kubernetes "bad" --kind Pod --foo bar
+  [[ "${status}" -ne 0 ]]
 }
 
 @test "kubernetes: multiple bindings" {
-  shell-op::kubernetes "pods" kind=Pod events=Added
-  shell-op::kubernetes "svcs" kind=Service events=Deleted
+  shell-op::kubernetes "pods" --kind Pod --events Added
+  shell-op::kubernetes "svcs" --kind Service --events Deleted
 
   local config
   config="$(shell-op::config)"
@@ -80,8 +89,8 @@ teardown() {
 }
 
 @test "kubernetes: field selector" {
-  shell-op::kubernetes "watch" kind=Pod \
-    fields="status.phase=Running,metadata.name=nginx"
+  shell-op::kubernetes "watch" --kind Pod \
+    --fields "status.phase=Running,metadata.name=nginx"
 
   local config
   config="$(shell-op::config)"
@@ -90,29 +99,49 @@ teardown() {
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].fieldSelector.matchExpressions[0].value')" == "Running" ]]
 }
 
+@test "kubernetes: --help shows usage" {
+  run shell-op::kubernetes --help
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" == *"Register a Kubernetes binding"* ]]
+  [[ "${output}" == *"--kind"* ]]
+}
+
 # ── shell-op::schedule ─────────────────────────────────
 
 @test "schedule: cron binding" {
-  shell-op::schedule "every-5m" "*/5 * * * *"
+  shell-op::schedule "every-5m" --crontab "*/5 * * * *"
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.schedule[0].name')" == "every-5m" ]]
   [[ "$(echo "${config}" | jq -r '.schedule[0].crontab')" == "*/5 * * * *" ]]
 }
 
+@test "schedule: short flag" {
+  shell-op::schedule "fast" -c "*/1 * * * *"
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.schedule[0].crontab')" == "*/1 * * * *" ]]
+}
+
 @test "schedule: missing crontab fails" {
-  run shell-op::schedule "bad" ""
+  run shell-op::schedule "bad"
   [[ "${status}" -ne 0 ]]
-  [[ "${output}" == *"crontab is required"* ]]
 }
 
 @test "schedule: multiple schedules" {
-  shell-op::schedule "fast" "*/1 * * * *"
-  shell-op::schedule "slow" "0 * * * *"
+  shell-op::schedule "fast" --crontab "*/1 * * * *"
+  shell-op::schedule "slow" --crontab "0 * * * *"
 
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.schedule | length')" == "2" ]]
+}
+
+@test "schedule: --help shows usage" {
+  run shell-op::schedule --help
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" == *"Register a schedule binding"* ]]
+  [[ "${output}" == *"--crontab"* ]]
 }
 
 # ── shell-op::startup ─────────────────────────────────
@@ -125,10 +154,17 @@ teardown() {
 }
 
 @test "startup: custom order" {
-  shell-op::startup 10
+  shell-op::startup --order 10
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.onStartup')" == "10" ]]
+}
+
+@test "startup: short flag" {
+  shell-op::startup -o 5
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.onStartup')" == "5" ]]
 }
 
 # ── shell-op::config ──────────────────────────────────
@@ -144,9 +180,9 @@ teardown() {
 }
 
 @test "config: combined bindings" {
-  shell-op::startup 1
-  shell-op::schedule "cron" "*/5 * * * *"
-  shell-op::kubernetes "pods" kind=Pod events=Added
+  shell-op::startup --order 1
+  shell-op::schedule "cron" --crontab "*/5 * * * *"
+  shell-op::kubernetes "pods" --kind Pod --events Added
 
   local config
   config="$(shell-op::config)"
@@ -168,7 +204,7 @@ teardown() {
 }
 
 @test "run: --config outputs config" {
-  shell-op::kubernetes "pods" kind=Pod
+  shell-op::kubernetes "pods" --kind Pod
   local config
   config="$(shell-op::run --config)"
   [[ "$(echo "${config}" | jq -r '.configVersion')" == "v1" ]]
@@ -296,7 +332,6 @@ JSON
 # ── CLI ────────────────────────────────────────────────
 
 @test "init: scaffolds hook file" {
-  source argsh
   cd "${_tmp}"
   main::init --name my-hook
   [[ -f "hooks/my-hook.sh" ]]

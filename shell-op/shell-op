@@ -27,64 +27,65 @@ declare -gA __SHELLOP_HANDLERS=()
 # ── shell-op::kubernetes ───────────────────────────────
 
 # @description Register a Kubernetes binding.
-#   Key=value pairs map to shell-operator config fields.
 # @arg $1 string Binding name
-# @arg $@ string Config pairs: kind= apiVersion= events= labels= fields= jqFilter= namespace=
 # @example
 #   shell-op::kubernetes "watch-pods" \
-#     kind=Pod apiVersion=v1 events=Added,Modified \
-#     labels="app=myapp" jqFilter='.metadata.name'
+#     --kind Pod --api-version v1 --events Added,Modified \
+#     --labels "app=myapp" --jq-filter '.metadata.name'
 shell-op::kubernetes() {
-  local _name="${1}"; shift
-  local _kind="" _api="" _events="" _labels="" _fields="" _jq="" _ns=""
-  local _arg
-  for _arg in "${@}"; do
-    case "${_arg}" in
-      kind=*)       _kind="${_arg#kind=}" ;;
-      apiVersion=*) _api="${_arg#apiVersion=}" ;;
-      events=*)     _events="${_arg#events=}" ;;
-      labels=*)     _labels="${_arg#labels=}" ;;
-      fields=*)     _fields="${_arg#fields=}" ;;
-      jqFilter=*)   _jq="${_arg#jqFilter=}" ;;
-      namespace=*)  _ns="${_arg#namespace=}" ;;
-      *) echo "shell-op::kubernetes: unknown key: ${_arg}" >&2; return 1 ;;
-    esac
-  done
+  local name kind api_version events labels fields jq_filter namespace
+  local -a args=(
+    'name:!'               "Binding name"
+    'kind|k:!'             "Resource kind (e.g. Pod, Deployment)"
+    'api-version|a'        "API group/version (e.g. v1, apps/v1)"
+    'events|e'             "Comma-separated events: Added,Modified,Deleted"
+    'labels|l'             "Label selector (key=val,...)"
+    'fields|f'             "Field selector (key=val,...)"
+    'jq-filter|j'          "jq filter expression"
+    'namespace|n'          "Namespace to watch"
+  )
+  :args "Register a Kubernetes binding" "${@}"
 
-  [[ -n "${_kind}" ]] || { echo "shell-op::kubernetes: kind= is required" >&2; return 1; }
-
-  __SHELLOP_K8S_NAMES+=("${_name}")
-  __SHELLOP_K8S_KIND["${_name}"]="${_kind}"
-  __SHELLOP_K8S_API["${_name}"]="${_api}"
-  __SHELLOP_K8S_EVENTS["${_name}"]="${_events}"
-  __SHELLOP_K8S_LABELS["${_name}"]="${_labels}"
-  __SHELLOP_K8S_FIELDS["${_name}"]="${_fields}"
-  __SHELLOP_K8S_JQ["${_name}"]="${_jq}"
-  __SHELLOP_K8S_NS["${_name}"]="${_ns}"
+  __SHELLOP_K8S_NAMES+=("${name}")
+  __SHELLOP_K8S_KIND["${name}"]="${kind}"
+  __SHELLOP_K8S_API["${name}"]="${api_version:-}"
+  __SHELLOP_K8S_EVENTS["${name}"]="${events:-}"
+  __SHELLOP_K8S_LABELS["${name}"]="${labels:-}"
+  __SHELLOP_K8S_FIELDS["${name}"]="${fields:-}"
+  __SHELLOP_K8S_JQ["${name}"]="${jq_filter:-}"
+  __SHELLOP_K8S_NS["${name}"]="${namespace:-}"
 }
 
 # ── shell-op::schedule ─────────────────────────────────
 
 # @description Register a schedule binding.
-# @arg $1 string Binding name
-# @arg $2 string Crontab expression
 # @example
-#   shell-op::schedule "every-5m" "*/5 * * * *"
+#   shell-op::schedule "every-5m" --crontab "*/5 * * * *"
 shell-op::schedule() {
-  local _name="${1}" _cron="${2}"
-  [[ -n "${_cron}" ]] || { echo "shell-op::schedule: crontab is required" >&2; return 1; }
+  local name crontab
+  local -a args=(
+    'name:!'       "Binding name"
+    'crontab|c:!'  "Cron expression (5 or 6 fields)"
+  )
+  :args "Register a schedule binding" "${@}"
+
+  local _name="${name}"
   __SHELLOP_SCHED_NAMES+=("${_name}")
-  __SHELLOP_SCHED_CRON["${_name}"]="${_cron}"
+  __SHELLOP_SCHED_CRON["${_name}"]="${crontab}"
 }
 
 # ── shell-op::startup ──────────────────────────────────
 
 # @description Register an onStartup binding.
-# @arg $1 int Order (default: 1)
 # @example
-#   shell-op::startup 10
+#   shell-op::startup --order 10
 shell-op::startup() {
-  __SHELLOP_STARTUP="${1:-1}"
+  local order
+  local -a args=(
+    'order|o' "Execution order (default: 1)"
+  )
+  :args "Register an onStartup binding" "${@}"
+  __SHELLOP_STARTUP="${order:-1}"
 }
 
 # ── shell-op::on ───────────────────────────────────────
@@ -344,11 +345,11 @@ import shell-op
 # ── Bindings ───────────────────────────────────────────
 
 shell-op::kubernetes "watch-pods" \
-  kind=Pod apiVersion=v1 \
-  events=Added,Modified,Deleted
+  --kind Pod --api-version v1 \
+  --events Added,Modified,Deleted
 
-# shell-op::schedule "every-5m" "*/5 * * * *"
-# shell-op::startup 1
+# shell-op::schedule "every-5m" --crontab "*/5 * * * *"
+# shell-op::startup --order 1
 
 # ── Handlers ───────────────────────────────────────────
 
