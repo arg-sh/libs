@@ -1,0 +1,5 @@
+name: shell-op
+version: 0.1.0
+description: Declarative shell-operator hooks with argsh
+requires:
+  argsh: ">=0.9.0"
