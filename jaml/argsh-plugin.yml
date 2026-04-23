@@ -1,5 +1,5 @@
 name: jaml
-version: 0.1.0
+version: 0.1.1
 description: Structured data access for YAML/JSON
 requires:
   argsh: ">=0.9.0"
