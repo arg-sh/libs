@@ -35,52 +35,52 @@ shell-op::on() {
     group="${handler}"
   fi
 
-  local _kind_spec _api _k
-  for _kind_spec in "${kind[@]}"; do
-    if [[ "${_kind_spec}" == */* ]]; then
-      _api="${_kind_spec%/*}"
-      _k="${_kind_spec##*/}"
+  local kind_spec api k
+  for kind_spec in "${kind[@]}"; do
+    if [[ "${kind_spec}" == */* ]]; then
+      api="${kind_spec%/*}"
+      k="${kind_spec##*/}"
     else
-      _api=""
-      _k="${_kind_spec}"
+      api=""
+      k="${kind_spec}"
     fi
-    _k="${_k^}"
+    k="${k^}"
 
-    local _json='{"name":"'"${handler}"'","kind":"'"${_k}"'"'
-    [[ -z "${_api}" ]]          || _json+=',"apiVersion":"'"${_api}"'"'
-    [[ -z "${filter:-}" ]]      || _json+=',"jqFilter":"'"${filter}"'"'
-    [[ -z "${namespace:-}" ]]   || _json+=',"namespace":{"nameSelector":{"matchNames":["'"${namespace}"'"]}}'
-    [[ -z "${group:-}" ]]       || _json+=',"group":"'"${group}"'"'
+    local json='{"name":"'"${handler}"'","kind":"'"${k}"'"'
+    [[ -z "${api}" ]]           || json+=',"apiVersion":"'"${api}"'"'
+    [[ -z "${filter:-}" ]]      || json+=',"jqFilter":"'"${filter}"'"'
+    [[ -z "${namespace:-}" ]]   || json+=',"namespace":{"nameSelector":{"matchNames":["'"${namespace}"'"]}}'
+    [[ -z "${group:-}" ]]       || json+=',"group":"'"${group}"'"'
 
     if (( no_sync )); then
-      _json+=',"executeHookOnSynchronization":false'
+      json+=',"executeHookOnSynchronization":false'
     fi
 
     if (( ${#event[@]} > 0 )); then
-      _json+=',"executeHookOnEvent":['
-      local _first=1 _ev
-      for _ev in "${event[@]}"; do
-        (( _first )) && _first=0 || _json+=","
-        _json+='"'"${_ev}"'"'
+      json+=',"executeHookOnEvent":['
+      local first=1 ev
+      for ev in "${event[@]}"; do
+        (( first )) && first=0 || json+=","
+        json+='"'"${ev}"'"'
       done
-      _json+=']'
+      json+=']'
     fi
 
     if [[ -n "${labels:-}" ]]; then
-      _json+=',"labelSelector":{"matchLabels":{'
-      local _lfirst=1 _lbl _lk _lv
-      IFS=',' read -ra _lbls <<< "${labels}"
-      for _lbl in "${_lbls[@]}"; do
-        _lk="${_lbl%%=*}"
-        _lv="${_lbl#*=}"
-        (( _lfirst )) && _lfirst=0 || _json+=","
-        _json+='"'"${_lk}"'":"'"${_lv}"'"'
+      json+=',"labelSelector":{"matchLabels":{'
+      local lfirst=1 lbl lk lv
+      IFS=',' read -ra lbls <<< "${labels}"
+      for lbl in "${lbls[@]}"; do
+        lk="${lbl%%=*}"
+        lv="${lbl#*=}"
+        (( lfirst )) && lfirst=0 || json+=","
+        json+='"'"${lk}"'":"'"${lv}"'"'
       done
-      _json+='}}'
+      json+='}}'
     fi
 
-    _json+='}'
-    echo "kubernetes"$'\t'"${handler}"$'\t'"${_json}" >> "${path_bindings}"
+    json+='}'
+    echo "kubernetes"$'\t'"${handler}"$'\t'"${json}" >> "${path_bindings}"
   done
 }
 
@@ -97,8 +97,8 @@ shell-op::cron() {
   )
   :args "Register a schedule binding" "${@}"
 
-  local _json='{"name":"'"${handler}"'","crontab":"'"${crontab}"'"}'
-  echo "schedule"$'\t'"${handler}"$'\t'"${_json}" >> "${path_bindings}"
+  local json='{"name":"'"${handler}"'","crontab":"'"${crontab}"'"}'
+  echo "schedule"$'\t'"${handler}"$'\t'"${json}" >> "${path_bindings}"
 }
 
 # @description Register a startup handler.
@@ -136,12 +136,12 @@ shell-op::config() {
   local startup_order=""
 
   if [[ -s "${path_bindings}" ]]; then
-    local _type _handler _data
-    while IFS=$'\t' read -r _type _handler _data; do
-      case "${_type}" in
-        kubernetes) k8s+=("${_data}") ;;
-        schedule)   sched+=("${_data}") ;;
-        startup)    startup_order="${_data}" ;;
+    local btype bhandler bdata
+    while IFS=$'\t' read -r btype bhandler bdata; do
+      case "${btype}" in
+        kubernetes) k8s+=("${bdata}") ;;
+        schedule)   sched+=("${bdata}") ;;
+        startup)    startup_order="${bdata}" ;;
       esac
     done < "${path_bindings}"
   fi
