@@ -189,6 +189,7 @@ jobs:
         run: |
           id=$(docker create ghcr.io/arg-sh/argsh:latest)
           sudo docker cp "${id}:/usr/local/bin/argsh" /usr/local/bin/argsh
+          sudo docker cp "${id}:/usr/local/lib/argsh.so" /usr/local/lib/argsh.so
           docker rm "${id}"
           sudo chmod +x /usr/local/bin/argsh
 
