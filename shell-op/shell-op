@@ -35,7 +35,7 @@ shell-op::on() {
     'group|g'                "Group key for batching"
     'queue|q'                "Named queue for parallel execution"
     'resync|r'               "Resynchronization period (e.g. 1h, 30m)"
-    'no-sync:+'              "Skip Synchronization on startup"
+    'no-sync|:+'              "Skip Synchronization on startup"
     'path_bindings|:^~file'  "Path to bindings file"
     "${args[@]}"
   )
@@ -103,11 +103,11 @@ shell-op::on() {
 shell-op::cron() {
   local crontab handler queue include_snapshots allow_failure=0 path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
   local -a args=(
-    'crontab:!'              "Cron expression (5 or 6 fields)"
+    'crontab'              "Cron expression (5 or 6 fields)"
     'handler:~declared'      "Handler function"
     'queue|q'                "Named queue for parallel execution"
     'include-snapshots|i'    "Include snapshots from named k8s binding"
-    'allow-failure:+'        "Ignore hook execution errors"
+    'allow-failure|:+'        "Ignore hook execution errors"
     'path_bindings|:^~file'  "Path to bindings file"
     "${args[@]}"
   )
