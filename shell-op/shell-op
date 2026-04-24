@@ -11,8 +11,12 @@
 : "${SHELLOP_BINDINGS:="$(mktemp)"}"
 
 to::declared() {
-  declare -f "${1:-}" &>/dev/null || return 1
-  echo "${1}"
+  local handler="${1:-}"
+  declare -f "${handler}" &>/dev/null || {
+    echo "Handler function '${handler}' is not declared" >&2
+    return 1
+  }
+  echo "${handler}"
 }
 
 # @description Register a Kubernetes watch binding.
@@ -114,7 +118,7 @@ shell-op::config() {
   local startup="${startup:-}" order="${order:-1}" path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
   local -a args=(
     'startup|:^' "Startup handler function"
-    'order|:^' "Startup execution order"
+    'order|:^~int' "Startup execution order"
     'path_bindings|:^~file' "Path to bindings file"
   )
   :args "Generate --config JSON from registered bindings" "${@}"
