@@ -4,187 +4,221 @@
 # @brief Declarative shell-operator hooks with argsh
 # @description
 #   Wraps flant/shell-operator hook boilerplate into clean argsh functions.
-#   Declare bindings, route events to functions, access context without raw jq.
+#   Declare bindings, route events to handlers, access context via :args.
 #
 #   Executable: argsh run shell-op init my-hook
 #   Library:    import shell-op
 
-# ── Internal state ─────────────────────────────────────
+# ── Internal state (minimal) ──────────────────────────
 
-declare -ga __SHELLOP_K8S_NAMES=()
-declare -gA __SHELLOP_K8S_KIND=()
-declare -gA __SHELLOP_K8S_API=()
-declare -gA __SHELLOP_K8S_EVENTS=()
-declare -gA __SHELLOP_K8S_LABELS=()
-declare -gA __SHELLOP_K8S_FIELDS=()
-declare -gA __SHELLOP_K8S_JQ=()
-declare -gA __SHELLOP_K8S_NS=()
-declare -ga __SHELLOP_SCHED_NAMES=()
-declare -gA __SHELLOP_SCHED_CRON=()
+# Each entry: type\thandler\tjson_fragment
+declare -ga __SHELLOP_BINDINGS=()
 declare -gi __SHELLOP_STARTUP=-1
-declare -gA __SHELLOP_HANDLERS=()
+declare -g  __SHELLOP_STARTUP_HANDLER=""
 
-# ── shell-op::kubernetes ───────────────────────────────
+# ── Pre-defined args arrays for handlers ──────────────
 
-# @description Register a Kubernetes binding.
-# @arg $1 string Binding name
-# @example
-#   shell-op::kubernetes "watch-pods" \
-#     --kind Pod --api-version v1 --events Added,Modified \
-#     --labels "app=myapp" --jq-filter '.metadata.name'
-shell-op::kubernetes() {
-  local name kind api_version events labels fields jq_filter namespace
-  local -a args=(
-    'name:!'               "Binding name"
-    'kind|k:!'             "Resource kind (e.g. Pod, Deployment)"
-    'api-version|a'        "API group/version (e.g. v1, apps/v1)"
-    'events|e'             "Comma-separated events: Added,Modified,Deleted"
-    'labels|l'             "Label selector (key=val,...)"
-    'fields|f'             "Field selector (key=val,...)"
-    'jq-filter|j'          "jq filter expression"
-    'namespace|n'          "Namespace to watch"
-  )
-  :args "Register a Kubernetes binding" "${@}"
+# @description Args array for kubernetes event handlers.
+#   Handlers declare `local` for any subset; :args skips the rest.
+# @internal
+declare -ga __SHELLOP_K8S_ARGS=(
+  'event'     "Event (Added/Modified/Deleted/Synchronization/Group/onStartup)"
+  'kind'      "Resource kind"
+  'name'      "Object metadata.name"
+  'namespace' "Object metadata.namespace"
+  'type'      "Context type (Event/Synchronization/Group)"
+  'binding'   "Binding name"
+  'ctx'       "Raw JSON binding context"
+)
 
-  __SHELLOP_K8S_NAMES+=("${name}")
-  __SHELLOP_K8S_KIND["${name}"]="${kind}"
-  __SHELLOP_K8S_API["${name}"]="${api_version:-}"
-  __SHELLOP_K8S_EVENTS["${name}"]="${events:-}"
-  __SHELLOP_K8S_LABELS["${name}"]="${labels:-}"
-  __SHELLOP_K8S_FIELDS["${name}"]="${fields:-}"
-  __SHELLOP_K8S_JQ["${name}"]="${jq_filter:-}"
-  __SHELLOP_K8S_NS["${name}"]="${namespace:-}"
-}
-
-# ── shell-op::schedule ─────────────────────────────────
-
-# @description Register a schedule binding.
-# @example
-#   shell-op::schedule "every-5m" --crontab "*/5 * * * *"
-shell-op::schedule() {
-  local name crontab
-  local -a args=(
-    'name:!'       "Binding name"
-    'crontab|c:!'  "Cron expression (5 or 6 fields)"
-  )
-  :args "Register a schedule binding" "${@}"
-
-  local _name="${name}"
-  __SHELLOP_SCHED_NAMES+=("${_name}")
-  __SHELLOP_SCHED_CRON["${_name}"]="${crontab}"
-}
-
-# ── shell-op::startup ──────────────────────────────────
-
-# @description Register an onStartup binding.
-# @example
-#   shell-op::startup --order 10
-shell-op::startup() {
-  local order
-  local -a args=(
-    'order|o' "Execution order (default: 1)"
-  )
-  :args "Register an onStartup binding" "${@}"
-  __SHELLOP_STARTUP="${order:-1}"
-}
+# @description Args array for cron handlers.
+# @internal
+declare -ga __SHELLOP_CRON_ARGS=(
+  'event'     "Event (Schedule)"
+  'binding'   "Binding name"
+  'ctx'       "Raw JSON binding context"
+)
 
 # ── shell-op::on ───────────────────────────────────────
 
-# @description Route an event type to a handler function.
-#   Type is one of: Event, Synchronization, Schedule, Startup, or a binding name.
-# @arg $1 string Event type or binding name
-# @arg $2 string Handler function name
+# @description Register a Kubernetes watch binding.
+#   Supports repeated -k and -e flags for multiple kinds/events.
+#   Last positional argument is the handler function.
 # @example
-#   shell-op::on Event pod::added
-#   shell-op::on Synchronization pod::sync
-#   shell-op::on "every-5m" cron::cleanup
+#   shell-op::on -k v1/Pod -e Added -e Modified -f .metadata.name pod::handle
+#   shell-op::on -k Pod -k Service -e Added pod::handle
 shell-op::on() {
-  local _type="${1}" _handler="${2}"
+  local -a _kinds=() _events=()
+  local _labels="" _fields="" _jqfilter="" _ns="" _no_sync=0 _group=""
+  local _handler=""
+
+  # Parse args manually since we need repeated flags + trailing positional
+  while (( $# > 0 )); do
+    case "${1}" in
+      -k|--kind)       _kinds+=("${2}"); shift 2 ;;
+      -e|--event)      _events+=("${2}"); shift 2 ;;
+      -l|--labels)     _labels="${2}"; shift 2 ;;
+      -f|--filter)     _jqfilter="${2}"; shift 2 ;;
+      -n|--namespace)  _ns="${2}"; shift 2 ;;
+      -g|--group)      _group="${2}"; shift 2 ;;
+      --no-sync)       _no_sync=1; shift ;;
+      -h|--help)
+        echo "Register a Kubernetes watch binding"
+        echo ""
+        echo "Usage:"
+        echo "  shell-op::on [options] <handler>"
+        echo ""
+        echo "Options:"
+        echo "  -k, --kind       Resource kind, optionally with apiVersion (v1/Pod)"
+        echo "  -e, --event      Watch event: Added, Modified, Deleted (repeatable)"
+        echo "  -l, --labels     Label selector (key=val,...)"
+        echo "  -f, --filter     jq filter expression"
+        echo "  -n, --namespace  Namespace to watch"
+        echo "  -g, --group      Group key for batching"
+        echo "  --no-sync        Skip Synchronization on startup"
+        echo "  -h, --help       Show this help"
+        return 0
+        ;;
+      -*)
+        echo "shell-op::on: unknown flag: ${1}" >&2
+        return 1
+        ;;
+      *)
+        _handler="${1}"; shift
+        ;;
+    esac
+  done
+
   [[ -n "${_handler}" ]] || { echo "shell-op::on: handler function required" >&2; return 1; }
-  __SHELLOP_HANDLERS["${_type}"]="${_handler}"
+  (( ${#_kinds[@]} > 0 )) || { echo "shell-op::on: at least one --kind required" >&2; return 1; }
+
+  # Auto-group if multiple kinds
+  if (( ${#_kinds[@]} > 1 )) && [[ -z "${_group}" ]]; then
+    _group="${_handler}"
+  fi
+
+  # Build JSON fragment for each kind
+  local _kind_spec _api _kind
+  for _kind_spec in "${_kinds[@]}"; do
+    # Parse apiVersion/Kind — last segment is kind, prefix is apiVersion
+    if [[ "${_kind_spec}" == */* ]]; then
+      _api="${_kind_spec%/*}"
+      _kind="${_kind_spec##*/}"
+    else
+      _api=""
+      _kind="${_kind_spec}"
+    fi
+    # Capitalize first letter
+    _kind="${_kind^}"
+
+    local _json='{"name":"'"${_handler}"'"'
+    _json+=',"kind":"'"${_kind}"'"'
+
+    [[ -z "${_api}" ]]       || _json+=',"apiVersion":"'"${_api}"'"'
+    [[ -z "${_jqfilter}" ]]  || _json+=',"jqFilter":"'"${_jqfilter}"'"'
+    [[ -z "${_ns}" ]]        || _json+=',"namespace":{"nameSelector":{"matchNames":["'"${_ns}"'"]}}'
+    [[ -z "${_group}" ]]     || _json+=',"group":"'"${_group}"'"'
+
+    if (( _no_sync )); then
+      _json+=',"executeHookOnSynchronization":false'
+    fi
+
+    if (( ${#_events[@]} > 0 )); then
+      _json+=',"executeHookOnEvent":['
+      local _first=1 _ev
+      for _ev in "${_events[@]}"; do
+        (( _first )) && _first=0 || _json+=","
+        _json+='"'"${_ev}"'"'
+      done
+      _json+=']'
+    fi
+
+    if [[ -n "${_labels}" ]]; then
+      _json+=',"labelSelector":{"matchLabels":{'
+      local _lfirst=1 _lbl _lk _lv
+      IFS=',' read -ra _lbls <<< "${_labels}"
+      for _lbl in "${_lbls[@]}"; do
+        _lk="${_lbl%%=*}"
+        _lv="${_lbl#*=}"
+        (( _lfirst )) && _lfirst=0 || _json+=","
+        _json+='"'"${_lk}"'":"'"${_lv}"'"'
+      done
+      _json+='}}'
+    fi
+
+    _json+='}'
+    __SHELLOP_BINDINGS+=("kubernetes"$'\t'"${_handler}"$'\t'"${_json}")
+  done
 }
 
-# ── shell-op::config ───────────────────────────────────
+# ── shell-op::cron ─────────────────────────────────────
 
-# @description Generate the --config JSON output from declared bindings.
+# @description Register a schedule binding.
+# @arg $1 string Crontab expression
+# @arg $2 string Handler function
+# @example
+#   shell-op::cron "*/5 * * * *" cron::handle
+shell-op::cron() {
+  local _cron="${1}" _handler="${2}"
+  [[ -n "${_cron}" ]]    || { echo "shell-op::cron: crontab required" >&2; return 1; }
+  [[ -n "${_handler}" ]] || { echo "shell-op::cron: handler function required" >&2; return 1; }
+
+  local _json='{"name":"'"${_handler}"'","crontab":"'"${_cron}"'"}'
+  __SHELLOP_BINDINGS+=("schedule"$'\t'"${_handler}"$'\t'"${_json}")
+}
+
+# ── shell-op::startup ─────────────────────────────────
+
+# @description Register a startup handler.
+# @arg $1 string Handler function (optional, uses onStartup order 1)
+# @arg $2 int Order (optional, default: 1)
+# @example
+#   shell-op::startup pod::handle
+#   shell-op::startup pod::handle 10
+shell-op::startup() {
+  __SHELLOP_STARTUP_HANDLER="${1:-}"
+  __SHELLOP_STARTUP="${2:-1}"
+}
+
+# ── shell-op::config ──────────────────────────────────
+
+# @description Generate --config JSON from registered bindings.
 # @stdout JSON config for shell-operator
+# @internal
 shell-op::config() {
   local _out='{"configVersion":"v1"'
 
-  # onStartup
   if (( __SHELLOP_STARTUP >= 0 )); then
     _out+=',"onStartup":'"${__SHELLOP_STARTUP}"
   fi
 
-  # schedule
-  if (( ${#__SHELLOP_SCHED_NAMES[@]} > 0 )); then
+  # Collect by type
+  local -a _k8s=() _sched=()
+  local _entry _type _json
+  for _entry in "${__SHELLOP_BINDINGS[@]}"; do
+    IFS=$'\t' read -r _type _ _json <<< "${_entry}"
+    case "${_type}" in
+      kubernetes) _k8s+=("${_json}") ;;
+      schedule)   _sched+=("${_json}") ;;
+    esac
+  done
+
+  if (( ${#_sched[@]} > 0 )); then
     _out+=',"schedule":['
-    local _first=1 _name
-    for _name in "${__SHELLOP_SCHED_NAMES[@]}"; do
+    local _first=1
+    for _json in "${_sched[@]}"; do
       (( _first )) && _first=0 || _out+=","
-      _out+='{"name":"'"${_name}"'","crontab":"'"${__SHELLOP_SCHED_CRON["${_name}"]}"'"}'
+      _out+="${_json}"
     done
     _out+=']'
   fi
 
-  # kubernetes
-  if (( ${#__SHELLOP_K8S_NAMES[@]} > 0 )); then
+  if (( ${#_k8s[@]} > 0 )); then
     _out+=',"kubernetes":['
-    local _first=1 _name _kind _api _events _labels _fields _jq _ns
-    for _name in "${__SHELLOP_K8S_NAMES[@]}"; do
-      _kind="${__SHELLOP_K8S_KIND["${_name}"]}"
-      _api="${__SHELLOP_K8S_API["${_name}"]:-}"
-      _events="${__SHELLOP_K8S_EVENTS["${_name}"]:-}"
-      _labels="${__SHELLOP_K8S_LABELS["${_name}"]:-}"
-      _fields="${__SHELLOP_K8S_FIELDS["${_name}"]:-}"
-      _jq="${__SHELLOP_K8S_JQ["${_name}"]:-}"
-      _ns="${__SHELLOP_K8S_NS["${_name}"]:-}"
-
+    local _first=1
+    for _json in "${_k8s[@]}"; do
       (( _first )) && _first=0 || _out+=","
-      _out+='{"name":"'"${_name}"'","kind":"'"${_kind}"'"'
-
-      [[ -z "${_api}" ]]    || _out+=',"apiVersion":"'"${_api}"'"'
-      [[ -z "${_jq}" ]]     || _out+=',"jqFilter":"'"${_jq}"'"'
-      [[ -z "${_ns}" ]]     || _out+=',"namespace":{"nameSelector":{"matchNames":["'"${_ns}"'"]}}'
-
-      if [[ -n "${_events}" ]]; then
-        _out+=',"executeHookOnEvent":['
-        local _efirst=1 _ev
-        IFS=',' read -ra _evs <<< "${_events}"
-        for _ev in "${_evs[@]}"; do
-          (( _efirst )) && _efirst=0 || _out+=","
-          _out+='"'"${_ev}"'"'
-        done
-        _out+=']'
-      fi
-
-      if [[ -n "${_labels}" ]]; then
-        _out+=',"labelSelector":{"matchLabels":{'
-        local _lfirst=1 _lbl _lk _lv
-        IFS=',' read -ra _lbls <<< "${_labels}"
-        for _lbl in "${_lbls[@]}"; do
-          _lk="${_lbl%%=*}"
-          _lv="${_lbl#*=}"
-          (( _lfirst )) && _lfirst=0 || _out+=","
-          _out+='"'"${_lk}"'":"'"${_lv}"'"'
-        done
-        _out+='}}'
-      fi
-
-      if [[ -n "${_fields}" ]]; then
-        _out+=',"fieldSelector":{"matchExpressions":['
-        local _ffirst=1 _fld _fk _fv
-        IFS=',' read -ra _flds <<< "${_fields}"
-        for _fld in "${_flds[@]}"; do
-          _fk="${_fld%%=*}"
-          _fv="${_fld#*=}"
-          (( _ffirst )) && _ffirst=0 || _out+=","
-          _out+='{"field":"'"${_fk}"'","operator":"Equals","value":"'"${_fv}"'"}'
-        done
-        _out+=']}'
-      fi
-
-      _out+='}'
+      _out+="${_json}"
     done
     _out+=']'
   fi
@@ -193,127 +227,101 @@ shell-op::config() {
   echo "${_out}"
 }
 
-# ── Context accessors ──────────────────────────────────
-
-# @description Read binding context from BINDING_CONTEXT_PATH.
-# @arg $1 int Context index (default: 0)
-# @stdout Raw JSON of binding context entry
-shell-op::context() {
-  local _idx="${1:-0}"
-  jq -r ".[${_idx}]" "${BINDING_CONTEXT_PATH}"
-}
-
-# @description Get the event type from binding context.
-# @arg $1 int Context index (default: 0)
-# @stdout Event type string
-shell-op::type() {
-  local _idx="${1:-0}"
-  jq -r ".[${_idx}].type // empty" "${BINDING_CONTEXT_PATH}"
-}
-
-# @description Get the binding name from binding context.
-# @arg $1 int Context index (default: 0)
-# @stdout Binding name string
-shell-op::binding() {
-  local _idx="${1:-0}"
-  jq -r ".[${_idx}].binding // empty" "${BINDING_CONTEXT_PATH}"
-}
-
-# @description Extract fields from the Kubernetes object in context.
-#   Works like jaml::get — var=.path assigns, .path prints.
-# @arg $@ string Field bindings
-# @example
-#   local name namespace
-#   shell-op::object name=.metadata.name namespace=.metadata.namespace
-shell-op::object() {
-  local _idx=0
-  if [[ "${1}" =~ ^[0-9]+$ ]]; then
-    _idx="${1}"; shift
-  fi
-
-  local _arg _var _path
-  for _arg in "${@}"; do
-    if [[ "${_arg}" == *=* ]]; then
-      _var="${_arg%%=*}"
-      _path="${_arg#*=}"
-      local -n _ref="${_var}"
-      _ref="$(jq -r ".[${_idx}].object${_path} // empty" "${BINDING_CONTEXT_PATH}")"
-    else
-      jq -r ".[${_idx}].object${_arg} // empty" "${BINDING_CONTEXT_PATH}"
-    fi
-  done
-}
-
-# @description Extract fields from filterResult in context.
-# @arg $@ string Field bindings (var=.path or .path)
-shell-op::filter() {
-  local _idx=0
-  if [[ "${1}" =~ ^[0-9]+$ ]]; then
-    _idx="${1}"; shift
-  fi
-
-  local _arg _var _path
-  for _arg in "${@}"; do
-    if [[ "${_arg}" == *=* ]]; then
-      _var="${_arg%%=*}"
-      _path="${_arg#*=}"
-      local -n _ref="${_var}"
-      _ref="$(jq -r ".[${_idx}].filterResult${_path} // empty" "${BINDING_CONTEXT_PATH}")"
-    else
-      jq -r ".[${_idx}].filterResult${_arg} // empty" "${BINDING_CONTEXT_PATH}"
-    fi
-  done
-}
-
-# @description Iterate snapshots from Synchronization events.
-# @arg $1 string Binding name (optional, uses first binding if omitted)
-# @stdout One JSON object per line
-shell-op::snapshots() {
-  local _binding="${1:-}"
-  if [[ -n "${_binding}" ]]; then
-    jq -c ".[0].snapshots[\"${_binding}\"][]" "${BINDING_CONTEXT_PATH}" 2>/dev/null
-  else
-    jq -c '.[0].objects[]' "${BINDING_CONTEXT_PATH}" 2>/dev/null
-  fi
-}
-
-# @description Get the number of binding context entries.
-# @stdout Integer count
-shell-op::count() {
-  jq -r 'length' "${BINDING_CONTEXT_PATH}"
-}
-
 # ── Dispatcher ─────────────────────────────────────────
 
-# @description Main dispatcher — call from hook entry point.
-#   Handles --config automatically, then routes events to registered handlers.
+# @description Dispatch a single binding context entry to the right handler.
+# @arg $1 int Context index
+# @internal
+shell-op::_dispatch() {
+  local _i="${1}"
+  local _ctx _type _binding _watch_event _event _handler=""
+
+  _ctx="$(jq -c ".[${_i}]" "${BINDING_CONTEXT_PATH}")"
+  _type="$(jq -r '.type // empty' <<< "${_ctx}")"
+  _binding="$(jq -r '.binding // empty' <<< "${_ctx}")"
+  _watch_event="$(jq -r '.watchEvent // empty' <<< "${_ctx}")"
+
+  # Unified event: watchEvent > type > binding
+  _event="${_watch_event:-${_type:-${_binding}}}"
+
+  # Find handler by binding name
+  local _entry _etype _ehandler
+  for _entry in "${__SHELLOP_BINDINGS[@]}"; do
+    IFS=$'\t' read -r _etype _ehandler _ <<< "${_entry}"
+    if [[ "${_ehandler}" == "${_binding}" ]]; then
+      _handler="${_ehandler}"
+      break
+    fi
+  done
+
+  # Startup handler
+  if [[ -z "${_handler}" && "${_binding}" == "onStartup" ]]; then
+    _handler="${__SHELLOP_STARTUP_HANDLER}"
+    _event="onStartup"
+  fi
+
+  [[ -n "${_handler}" ]] || return 0
+
+  # Extract object fields
+  local _name _namespace _kind
+  _name="$(jq -r '.object.metadata.name // empty' <<< "${_ctx}")"
+  _namespace="$(jq -r '.object.metadata.namespace // empty' <<< "${_ctx}")"
+  _kind="$(jq -r '.object.kind // empty' <<< "${_ctx}")"
+
+  # Also try filterResult for name if object is empty
+  if [[ -z "${_name}" ]]; then
+    _name="$(jq -r '.filterResult // empty' <<< "${_ctx}")"
+    # filterResult might be a string (from jqFilter)
+    [[ "${_name}" != "null" ]] || _name=""
+  fi
+
+  # Build handler args based on binding type
+  local _entry_type=""
+  for _entry in "${__SHELLOP_BINDINGS[@]}"; do
+    IFS=$'\t' read -r _etype _ehandler _ <<< "${_entry}"
+    if [[ "${_ehandler}" == "${_handler}" ]]; then
+      _entry_type="${_etype}"
+      break
+    fi
+  done
+
+  # Inject args array and call handler
+  case "${_entry_type}" in
+    kubernetes)
+      local -a args=("${__SHELLOP_K8S_ARGS[@]}")
+      "${_handler}" "${_event}" "${_kind}" "${_name}" "${_namespace}" "${_type}" "${_binding}" "${_ctx}"
+      ;;
+    schedule)
+      local -a args=("${__SHELLOP_CRON_ARGS[@]}")
+      "${_handler}" "${_event}" "${_binding}" "${_ctx}"
+      ;;
+    *)
+      # Startup or unknown — use k8s args shape
+      local -a args=("${__SHELLOP_K8S_ARGS[@]}")
+      "${_handler}" "${_event}" "" "" "" "${_type}" "${_binding}" "${_ctx}"
+      ;;
+  esac
+}
+
+# ── shell-op::run ──────────────────────────────────────
+
+# @description Main entry point — handles --config and dispatches events.
+#   Use as the last line in your hook script.
 # @arg $@ string Hook arguments (passed by shell-operator)
 # @example
-#   shell-op::kubernetes "watch-pods" kind=Pod events=Added
-#   shell-op::on Event pod::added
+#   shell-op::on -k Pod -e Added pod::handle
 #   shell-op::run "${@}"
 shell-op::run() {
-  # Handle --config
   if [[ "${1:-}" == "--config" ]]; then
     shell-op::config
     return 0
   fi
 
-  # Dispatch events
-  local _count _i _type _binding _handler
-  _count="$(shell-op::count)"
+  local _count _i
+  _count="$(jq -r 'length' "${BINDING_CONTEXT_PATH}")"
 
   for (( _i=0; _i < _count; _i++ )); do
-    _type="$(jq -r ".[${_i}].type // empty" "${BINDING_CONTEXT_PATH}")"
-    _binding="$(jq -r ".[${_i}].binding // empty" "${BINDING_CONTEXT_PATH}")"
-
-    # Try binding-specific handler first, then type handler
-    _handler="${__SHELLOP_HANDLERS["${_binding}"]:-}"
-    [[ -n "${_handler}" ]] || _handler="${__SHELLOP_HANDLERS["${_type}"]:-}"
-
-    if [[ -n "${_handler}" ]]; then
-      "${_handler}" "${_i}"
-    fi
+    shell-op::_dispatch "${_i}"
   done
 }
 
@@ -342,34 +350,28 @@ main::init() {
 source argsh
 import shell-op
 
-# ── Bindings ───────────────────────────────────────────
+pod::handle() {
+  local event name namespace ctx
+  :args "Handle pod events" "${@}"
 
-shell-op::kubernetes "watch-pods" \
-  --kind Pod --api-version v1 \
-  --events Added,Modified,Deleted
-
-# shell-op::schedule "every-5m" --crontab "*/5 * * * *"
-# shell-op::startup --order 1
-
-# ── Handlers ───────────────────────────────────────────
-
-pod::event() {
-  local name namespace
-  shell-op::object name=.metadata.name namespace=.metadata.namespace
-  echo "Pod ${namespace}/${name}: $(shell-op::type)"
+  case "${event}" in
+    "Synchronization")
+      echo "Syncing: ${namespace}/${name}"
+      ;;
+    *)
+      echo "Pod ${namespace}/${name} was ${event}"
+      ;;
+  esac
 }
 
-pod::sync() {
-  echo "Synchronization: listing existing pods"
-  shell-op::snapshots "watch-pods" | while read -r snap; do
-    echo "  - $(echo "${snap}" | jq -r '.object.metadata.name')"
-  done
+cron::tick() {
+  local event
+  :args "Cron tick" "${@}"
+  echo "Tick: ${event}"
 }
 
-# ── Routing ────────────────────────────────────────────
-
-shell-op::on Event pod::event
-shell-op::on Synchronization pod::sync
+shell-op::on -k v1/Pod -e Added -e Modified -e Deleted pod::handle
+shell-op::cron "*/5 * * * *" cron::tick
 
 shell-op::run "${@}"
 HOOK

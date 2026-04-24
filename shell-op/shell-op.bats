@@ -7,45 +7,36 @@ setup() {
   _tmp="$(mktemp -d)"
 
   # Reset state between tests
-  __SHELLOP_K8S_NAMES=()
-  __SHELLOP_K8S_KIND=()
-  __SHELLOP_K8S_API=()
-  __SHELLOP_K8S_EVENTS=()
-  __SHELLOP_K8S_LABELS=()
-  __SHELLOP_K8S_FIELDS=()
-  __SHELLOP_K8S_JQ=()
-  __SHELLOP_K8S_NS=()
-  __SHELLOP_SCHED_NAMES=()
-  __SHELLOP_SCHED_CRON=()
+  __SHELLOP_BINDINGS=()
   __SHELLOP_STARTUP=-1
-  __SHELLOP_HANDLERS=()
+  __SHELLOP_STARTUP_HANDLER=""
 }
 
 teardown() {
   rm -rf "${_tmp}"
 }
 
-# ── shell-op::kubernetes ───────────────────────────────
+# ── shell-op::on ───────────────────────────────────────
 
-@test "kubernetes: minimal binding with kind only" {
-  shell-op::kubernetes "watch-pods" --kind Pod
+@test "on: minimal binding" {
+  shell-op::on -k Pod pod::handle
   local config
   config="$(shell-op::config)"
-  [[ "$(echo "${config}" | jq -r '.kubernetes[0].name')" == "watch-pods" ]]
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].kind')" == "Pod" ]]
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].name')" == "pod::handle" ]]
 }
 
-@test "kubernetes: full binding with all options" {
-  shell-op::kubernetes "watch-deploys" \
-    --kind Deployment --api-version apps/v1 \
-    --events Added,Modified \
-    --labels "app=web,tier=frontend" \
-    --jq-filter '.metadata.name' \
-    --namespace production
+@test "on: full binding with all options" {
+  shell-op::on \
+    -k apps/v1/Deployment \
+    -e Added -e Modified \
+    -l "app=web,tier=frontend" \
+    -f '.metadata.name' \
+    -n production \
+    deploy::handle
 
   local config
   config="$(shell-op::config)"
-
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].kind')" == "Deployment" ]]
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].apiVersion')" == "apps/v1" ]]
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].jqFilter')" == ".metadata.name" ]]
@@ -57,132 +48,137 @@ teardown() {
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].namespace.nameSelector.matchNames[0]')" == "production" ]]
 }
 
-@test "kubernetes: short flags" {
-  shell-op::kubernetes "watch" -k Pod -a v1 -e Added -n default
+@test "on: apiVersion parsed from kind" {
+  shell-op::on -k v1/Pod pod::handle
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].apiVersion')" == "v1" ]]
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].kind')" == "Pod" ]]
+}
+
+@test "on: kind capitalized" {
+  shell-op::on -k pod pod::handle
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].kind')" == "Pod" ]]
-  [[ "$(echo "${config}" | jq -r '.kubernetes[0].apiVersion')" == "v1" ]]
-  [[ "$(echo "${config}" | jq -r '.kubernetes[0].executeHookOnEvent[0]')" == "Added" ]]
-  [[ "$(echo "${config}" | jq -r '.kubernetes[0].namespace.nameSelector.matchNames[0]')" == "default" ]]
 }
 
-@test "kubernetes: missing kind fails" {
-  run shell-op::kubernetes "bad" --api-version v1
-  [[ "${status}" -ne 0 ]]
-}
-
-@test "kubernetes: unknown flag fails" {
-  run shell-op::kubernetes "bad" --kind Pod --foo bar
-  [[ "${status}" -ne 0 ]]
-}
-
-@test "kubernetes: multiple bindings" {
-  shell-op::kubernetes "pods" --kind Pod --events Added
-  shell-op::kubernetes "svcs" --kind Service --events Deleted
-
+@test "on: multiple kinds auto-groups" {
+  shell-op::on -k Pod -k Service pod::handle
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.kubernetes | length')" == "2" ]]
-  [[ "$(echo "${config}" | jq -r '.kubernetes[0].name')" == "pods" ]]
-  [[ "$(echo "${config}" | jq -r '.kubernetes[1].name')" == "svcs" ]]
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].group')" == "pod::handle" ]]
+  [[ "$(echo "${config}" | jq -r '.kubernetes[1].group')" == "pod::handle" ]]
 }
 
-@test "kubernetes: field selector" {
-  shell-op::kubernetes "watch" --kind Pod \
-    --fields "status.phase=Running,metadata.name=nginx"
-
+@test "on: explicit group" {
+  shell-op::on -k Pod -g mesh pod::handle
   local config
   config="$(shell-op::config)"
-  [[ "$(echo "${config}" | jq -r '.kubernetes[0].fieldSelector.matchExpressions | length')" == "2" ]]
-  [[ "$(echo "${config}" | jq -r '.kubernetes[0].fieldSelector.matchExpressions[0].field')" == "status.phase" ]]
-  [[ "$(echo "${config}" | jq -r '.kubernetes[0].fieldSelector.matchExpressions[0].value')" == "Running" ]]
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].group')" == "mesh" ]]
 }
 
-@test "kubernetes: --help shows usage" {
-  run shell-op::kubernetes --help
+@test "on: --no-sync" {
+  shell-op::on -k Pod --no-sync pod::handle
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].executeHookOnSynchronization')" == "false" ]]
+}
+
+@test "on: missing handler fails" {
+  run shell-op::on -k Pod
+  [[ "${status}" -ne 0 ]]
+  [[ "${output}" == *"handler function required"* ]]
+}
+
+@test "on: missing kind fails" {
+  run shell-op::on pod::handle
+  [[ "${status}" -ne 0 ]]
+  [[ "${output}" == *"at least one --kind required"* ]]
+}
+
+@test "on: unknown flag fails" {
+  run shell-op::on -k Pod --foo bar pod::handle
+  [[ "${status}" -ne 0 ]]
+  [[ "${output}" == *"unknown flag"* ]]
+}
+
+@test "on: --help shows usage" {
+  run shell-op::on --help
   [[ "${status}" -eq 0 ]]
-  [[ "${output}" == *"Register a Kubernetes binding"* ]]
+  [[ "${output}" == *"Register a Kubernetes watch binding"* ]]
   [[ "${output}" == *"--kind"* ]]
 }
 
-# ── shell-op::schedule ─────────────────────────────────
-
-@test "schedule: cron binding" {
-  shell-op::schedule "every-5m" --crontab "*/5 * * * *"
+@test "on: repeated events accumulate" {
+  shell-op::on -k Pod -e Added -e Modified -e Deleted pod::handle
   local config
   config="$(shell-op::config)"
-  [[ "$(echo "${config}" | jq -r '.schedule[0].name')" == "every-5m" ]]
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].executeHookOnEvent | length')" == "3" ]]
+}
+
+# ── shell-op::cron ─────────────────────────────────────
+
+@test "cron: basic schedule" {
+  shell-op::cron "*/5 * * * *" cron::handle
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.schedule[0].name')" == "cron::handle" ]]
   [[ "$(echo "${config}" | jq -r '.schedule[0].crontab')" == "*/5 * * * *" ]]
 }
 
-@test "schedule: short flag" {
-  shell-op::schedule "fast" -c "*/1 * * * *"
-  local config
-  config="$(shell-op::config)"
-  [[ "$(echo "${config}" | jq -r '.schedule[0].crontab')" == "*/1 * * * *" ]]
-}
-
-@test "schedule: missing crontab fails" {
-  run shell-op::schedule "bad"
-  [[ "${status}" -ne 0 ]]
-}
-
-@test "schedule: multiple schedules" {
-  shell-op::schedule "fast" --crontab "*/1 * * * *"
-  shell-op::schedule "slow" --crontab "0 * * * *"
+@test "cron: multiple schedules" {
+  shell-op::cron "*/1 * * * *" fast::tick
+  shell-op::cron "0 * * * *" slow::tick
 
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.schedule | length')" == "2" ]]
 }
 
-@test "schedule: --help shows usage" {
-  run shell-op::schedule --help
-  [[ "${status}" -eq 0 ]]
-  [[ "${output}" == *"Register a schedule binding"* ]]
-  [[ "${output}" == *"--crontab"* ]]
+@test "cron: missing crontab fails" {
+  run shell-op::cron "" handler
+  [[ "${status}" -ne 0 ]]
+}
+
+@test "cron: missing handler fails" {
+  run shell-op::cron "*/5 * * * *" ""
+  [[ "${status}" -ne 0 ]]
 }
 
 # ── shell-op::startup ─────────────────────────────────
 
-@test "startup: default order" {
-  shell-op::startup
+@test "startup: registers handler" {
+  shell-op::startup my::init
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.onStartup')" == "1" ]]
+  [[ "${__SHELLOP_STARTUP_HANDLER}" == "my::init" ]]
 }
 
 @test "startup: custom order" {
-  shell-op::startup --order 10
+  shell-op::startup my::init 10
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.onStartup')" == "10" ]]
 }
 
-@test "startup: short flag" {
-  shell-op::startup -o 5
-  local config
-  config="$(shell-op::config)"
-  [[ "$(echo "${config}" | jq -r '.onStartup')" == "5" ]]
-}
-
 # ── shell-op::config ──────────────────────────────────
 
-@test "config: empty config is valid JSON" {
+@test "config: empty is valid JSON" {
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.configVersion')" == "v1" ]]
-  # No kubernetes, schedule, or startup keys
   [[ "$(echo "${config}" | jq 'has("kubernetes")')" == "false" ]]
   [[ "$(echo "${config}" | jq 'has("schedule")')" == "false" ]]
   [[ "$(echo "${config}" | jq 'has("onStartup")')" == "false" ]]
 }
 
 @test "config: combined bindings" {
-  shell-op::startup --order 1
-  shell-op::schedule "cron" --crontab "*/5 * * * *"
-  shell-op::kubernetes "pods" --kind Pod --events Added
+  shell-op::startup init::handler
+  shell-op::cron "*/5 * * * *" cron::handle
+  shell-op::on -k Pod -e Added pod::handle
 
   local config
   config="$(shell-op::config)"
@@ -191,142 +187,157 @@ teardown() {
   [[ "$(echo "${config}" | jq 'has("kubernetes")')" == "true" ]]
 }
 
-# ── shell-op::on + shell-op::run ──────────────────────
-
-@test "on: registers handler" {
-  shell-op::on Event my_handler
-  [[ "${__SHELLOP_HANDLERS["Event"]}" == "my_handler" ]]
-}
-
-@test "on: missing handler fails" {
-  run shell-op::on Event ""
-  [[ "${status}" -ne 0 ]]
-}
+# ── shell-op::run ──────────────────────────────────────
 
 @test "run: --config outputs config" {
-  shell-op::kubernetes "pods" --kind Pod
+  shell-op::on -k Pod pod::handle
   local config
   config="$(shell-op::run --config)"
   [[ "$(echo "${config}" | jq -r '.configVersion')" == "v1" ]]
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].kind')" == "Pod" ]]
 }
 
-@test "run: dispatches Event to handler" {
+@test "run: dispatches k8s Event to handler" {
   cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"Event","binding":"watch-pods","object":{"metadata":{"name":"nginx-abc"}}}]
+[{"type":"Event","binding":"pod::handle","watchEvent":"Added","object":{"kind":"Pod","metadata":{"name":"nginx","namespace":"default"}}}]
 JSON
   BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
 
-  _test_handler_called=""
-  test_handler() { _test_handler_called="yes-${1}"; }
+  _result=""
+  pod::handle() {
+    local event name namespace
+    local -a args=("${__SHELLOP_K8S_ARGS[@]}")
+    :args "test" "${@}"
+    _result="${event}:${name}:${namespace}"
+  }
 
-  shell-op::on Event test_handler
+  shell-op::on -k Pod -e Added pod::handle
   shell-op::run
 
-  [[ "${_test_handler_called}" == "yes-0" ]]
+  [[ "${_result}" == "Added:nginx:default" ]]
 }
 
-@test "run: dispatches by binding name over type" {
+@test "run: dispatches cron to handler" {
   cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"Event","binding":"my-binding"}]
+[{"type":"Schedule","binding":"cron::handle"}]
 JSON
   BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
 
-  _which=""
-  type_handler() { _which="type"; }
-  binding_handler() { _which="binding"; }
+  _result=""
+  cron::handle() {
+    local event binding
+    local -a args=("${__SHELLOP_CRON_ARGS[@]}")
+    :args "test" "${@}"
+    _result="${event}:${binding}"
+  }
 
-  shell-op::on Event type_handler
-  shell-op::on my-binding binding_handler
+  shell-op::cron "*/5 * * * *" cron::handle
   shell-op::run
 
-  [[ "${_which}" == "binding" ]]
+  [[ "${_result}" == "Schedule:cron::handle" ]]
 }
 
-# ── Context accessors ─────────────────────────────────
-
-@test "object: extracts fields from context" {
+@test "run: dispatches startup to handler" {
   cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"Event","object":{"metadata":{"name":"nginx","namespace":"default"},"spec":{"replicas":3}}}]
+[{"type":"","binding":"onStartup"}]
 JSON
   BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
 
-  local name namespace
-  shell-op::object name=.metadata.name namespace=.metadata.namespace
-  [[ "${name}" == "nginx" ]]
-  [[ "${namespace}" == "default" ]]
+  _result=""
+  init::handler() {
+    local event
+    local -a args=("${__SHELLOP_K8S_ARGS[@]}")
+    :args "test" "${@}"
+    _result="${event}"
+  }
+
+  shell-op::startup init::handler
+  shell-op::run
+
+  [[ "${_result}" == "onStartup" ]]
 }
 
-@test "object: prints to stdout without var=" {
+@test "run: unified event prefers watchEvent over type" {
   cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"Event","object":{"metadata":{"name":"nginx"}}}]
+[{"type":"Event","binding":"pod::handle","watchEvent":"Modified","object":{"kind":"Pod","metadata":{"name":"nginx","namespace":"default"}}}]
 JSON
   BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
 
-  local result
-  result="$(shell-op::object .metadata.name)"
-  [[ "${result}" == "nginx" ]]
+  _result=""
+  pod::handle() {
+    local event
+    local -a args=("${__SHELLOP_K8S_ARGS[@]}")
+    :args "test" "${@}"
+    _result="${event}"
+  }
+
+  shell-op::on -k Pod pod::handle
+  shell-op::run
+
+  [[ "${_result}" == "Modified" ]]
 }
 
-@test "filter: extracts filterResult" {
+@test "run: Synchronization event dispatches" {
   cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"Event","filterResult":{"name":"nginx","status":"Running"}}]
+[{"type":"Synchronization","binding":"pod::handle","objects":[{"object":{"kind":"Pod","metadata":{"name":"a","namespace":"ns"}}}]}]
 JSON
   BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
 
-  local name status
-  shell-op::filter name=.name status=.status
-  [[ "${name}" == "nginx" ]]
-  [[ "${status}" == "Running" ]]
+  _result=""
+  pod::handle() {
+    local event type
+    local -a args=("${__SHELLOP_K8S_ARGS[@]}")
+    :args "test" "${@}"
+    _result="${event}:${type}"
+  }
+
+  shell-op::on -k Pod pod::handle
+  shell-op::run
+
+  [[ "${_result}" == "Synchronization:Synchronization" ]]
 }
 
-@test "type: reads event type" {
+@test "run: handler receives ctx as raw JSON" {
   cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"Synchronization","binding":"pods"}]
+[{"type":"Event","binding":"pod::handle","watchEvent":"Added","object":{"kind":"Pod","metadata":{"name":"test","namespace":"default"}}}]
 JSON
   BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
 
-  [[ "$(shell-op::type)" == "Synchronization" ]]
+  _ctx_result=""
+  pod::handle() {
+    local ctx
+    local -a args=("${__SHELLOP_K8S_ARGS[@]}")
+    :args "test" "${@}"
+    _ctx_result="${ctx}"
+  }
+
+  shell-op::on -k Pod pod::handle
+  shell-op::run
+
+  # ctx should be valid JSON
+  echo "${_ctx_result}" | jq -e '.type == "Event"'
 }
 
-@test "binding: reads binding name" {
+@test "run: multiple context entries dispatched" {
   cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"Event","binding":"watch-pods"}]
+[
+  {"type":"Event","binding":"pod::handle","watchEvent":"Added","object":{"kind":"Pod","metadata":{"name":"a","namespace":"ns"}}},
+  {"type":"Event","binding":"pod::handle","watchEvent":"Deleted","object":{"kind":"Pod","metadata":{"name":"b","namespace":"ns"}}}
+]
 JSON
   BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
 
-  [[ "$(shell-op::binding)" == "watch-pods" ]]
-}
+  _call_count=0
+  pod::handle() {
+    local -a args=("${__SHELLOP_K8S_ARGS[@]}")
+    :args "test" "${@}"
+    _call_count=$(( _call_count + 1 ))
+  }
 
-@test "count: returns context length" {
-  cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"Event"},{"type":"Event"},{"type":"Synchronization"}]
-JSON
-  BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
+  shell-op::on -k Pod pod::handle
+  shell-op::run
 
-  [[ "$(shell-op::count)" == "3" ]]
-}
-
-@test "snapshots: iterates objects" {
-  cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"Synchronization","objects":[{"object":{"metadata":{"name":"a"}}},{"object":{"metadata":{"name":"b"}}}]}]
-JSON
-  BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
-
-  local count=0
-  shell-op::snapshots | while read -r _; do
-    count=$(( count + 1 ))
-  done
-  [[ "$(shell-op::snapshots | wc -l)" == "2" ]]
-}
-
-@test "snapshots: iterates named binding snapshots" {
-  cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"Synchronization","snapshots":{"pods":[{"object":{"metadata":{"name":"x"}}},{"object":{"metadata":{"name":"y"}}}]}}]
-JSON
-  BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
-
-  [[ "$(shell-op::snapshots "pods" | wc -l)" == "2" ]]
+  [[ "${_call_count}" == "2" ]]
 }
 
 # ── CLI ────────────────────────────────────────────────
@@ -337,6 +348,7 @@ JSON
   [[ -f "hooks/my-hook.sh" ]]
   [[ -x "hooks/my-hook.sh" ]]
   [[ "$(head -1 hooks/my-hook.sh)" == "#!/usr/bin/env bash" ]]
-  grep -q "shell-op::kubernetes" "hooks/my-hook.sh"
+  grep -q "shell-op::on" "hooks/my-hook.sh"
   grep -q "shell-op::run" "hooks/my-hook.sh"
+  grep -q "shell-op::cron" "hooks/my-hook.sh"
 }

@@ -1,0 +1,49 @@
+#!/usr/bin/env argsh
+# shellcheck shell=bash
+# vim: set ft=sh:
+set -euo pipefail
+
+import shell-op
+
+# args array is defined by the shell-op library
+# we only define variables that we use
+# ctx contains the raw json from the binding context; user can use jaml to parse it
+# question: do we mix binding + type + watchEvent in the same variable -> yes
+# we expose .[0].* as local variables -> local type binding watchEvent (if user needs it diffirantiated.)
+pod::handle() {
+  local event name namespace ctx # kind type 
+  :args "Handle pod events" "${@}"
+
+  case "${event}" in
+    # jq -r '.[0].binding' $BINDING_CONTEXT_PATH
+    "onStartup")
+      echo "Hook startup event"
+      ;;
+    # jq -r '.[0].type' $BINDING_CONTEXT_PATH
+    "Syncronization")
+      echo "Pod ${namespace}/${name} was synced"
+      ;;
+    # jq -r '.[0].watchEvent
+    *)
+      echo "Pod ${namespace}/${name} was ${event}"
+      ;;
+  esac
+
+  echo "ctx: ${ctx}"
+}
+
+cron::handle() {
+  local event name namespace # kind type 
+  :args "Handle cron events" "${@}"
+
+  echo "Cron ${namespace}/${name} was ${event}"
+}
+
+# can have multiple kinds and events
+# --no-sync will not sync the resource before calling the handler
+shell-op::on -k v1/pod -e Added -e Modified -e Deleted -f .metadata.name pod::handle
+shell-op::cron "*/5 * * * *" cron::handle
+
+# run the operator
+# argsh function with usage pattern (--config ... + registered on+cron as subcommands + help)
+shell-op::run "${@}"

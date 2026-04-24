@@ -43,63 +43,117 @@ fi
 source argsh
 import shell-op
 
-shell-op::kubernetes "watch-pods" \
-  --kind Pod --api-version v1 \
-  --events Added \
-  --labels "app=myapp" \
-  --jq-filter '.metadata.name'
+pod::handle() {
+  local event name namespace
+  :args "Handle pod events" "${@}"
 
-pod::added() {
-  local name
-  shell-op::object name=.metadata.name
-  echo "Pod '${name}' added"
+  echo "Pod ${namespace}/${name} was ${event}"
 }
 
-shell-op::on Event pod::added
+shell-op::on -k v1/Pod -e Added -l "app=myapp" -f '.metadata.name' pod::handle
 shell-op::run "${@}"
 ```
 
-## Bindings
+Handlers are argsh functions — declare `local` for the fields you need, `:args` skips the rest.
 
-### `shell-op::kubernetes` — watch Kubernetes resources
+## Kubernetes bindings
 
-```bash
-shell-op::kubernetes "watch-deploys" \
-  --kind Deployment \
-  --api-version apps/v1 \
-  --events Added,Modified,Deleted \
-  --labels "app=web,tier=frontend" \
-  --fields "status.phase=Running" \
-  --jq-filter '.metadata.name' \
-  --namespace production
-```
-
-All flags except `--kind` are optional. Every binding function supports `--help`.
-
-### `shell-op::schedule` — cron triggers
+### `shell-op::on` — watch resources
 
 ```bash
-shell-op::schedule "every-5m" --crontab "*/5 * * * *"
-shell-op::schedule "hourly" --crontab "0 * * * *"
+# Single kind, multiple events
+shell-op::on -k v1/Pod -e Added -e Modified -e Deleted pod::handle
+
+# Multiple kinds — auto-groups under the handler name
+shell-op::on -k Pod -k Service -e Added mesh::handle
+
+# Full options
+shell-op::on \
+  -k apps/v1/Deployment \
+  -e Added -e Modified \
+  -l "app=web,tier=frontend" \
+  -f '.metadata.name' \
+  -n production \
+  -g my-group \
+  --no-sync \
+  deploy::handle
 ```
+
+Flags are repeatable for `-k` (kind) and `-e` (event).
+
+| Flag | Long | Description |
+|---|---|---|
+| `-k` | `--kind` | Resource kind, optionally with apiVersion (`v1/Pod`, `apps/v1/Deployment`) |
+| `-e` | `--event` | Watch event: `Added`, `Modified`, `Deleted` (repeatable) |
+| `-l` | `--labels` | Label selector (`key=val,...`) |
+| `-f` | `--filter` | jq filter expression |
+| `-n` | `--namespace` | Namespace to watch |
+| `-g` | `--group` | Group key for batching multiple bindings |
+| | `--no-sync` | Skip Synchronization on startup |
+
+### Handler signature
+
+Handlers receive positional args with a pre-defined `:args` array. Declare `local` for the fields you need:
+
+```bash
+pod::handle() {
+  local event kind name namespace type binding ctx
+  :args "Handle pod events" "${@}"
+
+  case "${event}" in
+    "Synchronization")
+      echo "Initial sync: ${namespace}/${name}"
+      ;;
+    *)
+      echo "Pod ${namespace}/${name} was ${event}"
+      ;;
+  esac
+}
+```
+
+Available fields (in order):
+
+| Field | Description |
+|---|---|
+| `event` | Unified: watchEvent (`Added`/`Modified`/`Deleted`) or type (`Synchronization`/`Group`) or binding (`onStartup`) |
+| `kind` | Resource kind (`Pod`, `Service`, ...) |
+| `name` | `object.metadata.name` |
+| `namespace` | `object.metadata.namespace` |
+| `type` | Raw context type (`Event`/`Synchronization`/`Group`) |
+| `binding` | Binding name |
+| `ctx` | Full raw JSON binding context |
+
+## Schedule bindings
+
+### `shell-op::cron` — cron triggers
+
+```bash
+shell-op::cron "*/5 * * * *" cron::tick
+shell-op::cron "0 * * * *" hourly::report
+```
+
+Cron handlers receive: `event` (`Schedule`), `binding`, `ctx`.
+
+```bash
+cron::tick() {
+  local event binding
+  :args "Cron tick" "${@}"
+  echo "Triggered: ${binding}"
+}
+```
+
+## Startup
 
 ### `shell-op::startup` — run at operator start
 
 ```bash
-shell-op::startup --order 10  # default: 1
+shell-op::startup my::init      # order 1 (default)
+shell-op::startup my::init 10   # custom order
 ```
 
-## Event routing
+The handler receives `event` = `onStartup`.
 
-### `shell-op::on` — map events to functions
-
-```bash
-shell-op::on Event pod::event
-shell-op::on Synchronization pod::sync
-shell-op::on "every-5m" cron::cleanup   # by binding name
-```
-
-Binding-specific handlers take priority over type handlers.
+## Entry point
 
 ### `shell-op::run` — auto-dispatcher
 
@@ -107,42 +161,7 @@ Binding-specific handlers take priority over type handlers.
 shell-op::run "${@}"
 ```
 
-Handles `--config` automatically, then routes each binding context entry to the registered handler. The handler receives the context index as `$1`.
-
-## Context accessors
-
-### `shell-op::object` — read from the Kubernetes object
-
-```bash
-local name namespace
-shell-op::object name=.metadata.name namespace=.metadata.namespace
-
-# Or print to stdout
-echo "Name: $(shell-op::object .metadata.name)"
-```
-
-### `shell-op::filter` — read from filterResult
-
-```bash
-local name status
-shell-op::filter name=.name status=.status
-```
-
-### `shell-op::snapshots` — iterate Synchronization objects
-
-```bash
-shell-op::snapshots "watch-pods" | while read -r snap; do
-  echo "Pod: $(echo "${snap}" | jq -r '.object.metadata.name')"
-done
-```
-
-### `shell-op::type` / `shell-op::binding` / `shell-op::count`
-
-```bash
-echo "Event type: $(shell-op::type)"
-echo "Binding: $(shell-op::binding)"
-echo "Context entries: $(shell-op::count)"
-```
+Handles `--config` automatically (generates shell-operator JSON config from registered bindings), then dispatches each binding context entry to the matching handler.
 
 ## CLI
 
@@ -160,7 +179,8 @@ shell-op/
 ├── README.md           # this file
 ├── argsh-plugin.yml    # metadata
 ├── shell-op            # bash library + CLI executable
-└── shell-op.bats       # tests (32 tests)
+├── shell-op.bats       # tests (29 tests)
+└── example             # example hook
 ```
 
 ## License
