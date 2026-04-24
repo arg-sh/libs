@@ -1,5 +1,6 @@
 FROM flant/shell-operator:v1.14.3
 
-RUN curl -sL https://min.arg.sh -o /usr/local/bin/argsh \
- && chmod +x /usr/local/bin/argsh \
- && argsh lib add shell-op
+COPY --from=ghcr.io/arg-sh/argsh:latest /usr/local/bin/argsh /usr/local/bin/argsh
+COPY --from=ghcr.io/fentas/b:latest /b /usr/local/bin/b
+
+COPY shell-op argsh-plugin.yml /root/.local/share/argsh/libs/shell-op/
