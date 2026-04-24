@@ -23,7 +23,9 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install argsh
         run: |
-          sudo curl -sL https://min.arg.sh -o /usr/local/bin/argsh
+          id=$(docker create ghcr.io/arg-sh/argsh:latest)
+          sudo docker cp "${id}:/usr/local/bin/argsh" /usr/local/bin/argsh
+          docker rm "${id}"
           sudo chmod +x /usr/local/bin/argsh
       - name: Install yq
         run: |
