@@ -190,20 +190,12 @@ Handler function 'nonexistent::handler' is not declared
 
 ## Docker
 
-Base image with argsh + shell-op pre-installed:
-
-```dockerfile
-FROM flant/shell-operator:v1.14.3
-
-RUN curl -sL https://min.arg.sh -o /usr/local/bin/argsh \
- && chmod +x /usr/local/bin/argsh \
- && argsh lib add shell-op
-```
+Base image with argsh + shell-op pre-installed.
 
 ### Option 1: Bake hooks into the image
 
 ```dockerfile
-FROM ghcr.io/arg-sh/libs/shell-op:latest
+FROM ghcr.io/arg-sh/shell-op:latest
 COPY hooks/ /hooks/
 ```
 
@@ -222,7 +214,7 @@ configMapGenerator:
 spec:
   containers:
   - name: operator
-    image: ghcr.io/arg-sh/libs/shell-op:latest
+    image: ghcr.io/arg-sh/shell-op:latest
     volumeMounts:
     - name: hooks
       mountPath: /hooks
