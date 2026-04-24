@@ -235,3 +235,28 @@ jobs:
 
           echo "=== Manifest ==="
           oras manifest fetch "${ref}" | jq .
+
+      - name: Check if lib has a Dockerfile
+        id: docker
+        run: |
+          lib="${{ needs.meta.outputs.lib }}"
+          if [[ -f "${lib}/Dockerfile" ]]; then
+            echo "has_dockerfile=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_dockerfile=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.docker.outputs.has_dockerfile == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        if: steps.docker.outputs.has_dockerfile == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ needs.meta.outputs.lib }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ needs.meta.outputs.lib }}:${{ needs.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ needs.meta.outputs.lib }}:latest
+          platforms: linux/amd64,linux/arm64
