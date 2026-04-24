@@ -188,14 +188,61 @@ Handler functions are validated at registration time using the `to::declared` cu
 Handler function 'nonexistent::handler' is not declared
 ```
 
+## Docker
+
+Pre-built base image with argsh + shell-op ready to go:
+
+```dockerfile
+FROM flant/shell-operator:v1.14.3
+
+RUN curl -sL https://min.arg.sh -o /usr/local/bin/argsh \
+ && chmod +x /usr/local/bin/argsh \
+ && argsh lib add shell-op
+
+COPY hooks/ /hooks/
+```
+
+Just add your hooks and deploy:
+
+```bash
+docker build -t my-operator .
+```
+
+Or use the provided `Dockerfile` directly:
+
+```bash
+# Create hooks/
+mkdir -p hooks
+cat > hooks/watch-pods.sh << 'EOF'
+#!/usr/bin/env bash
+source argsh
+import shell-op
+
+pod::handle() {
+  local event name namespace
+  :args "Handle pods" "${@}"
+  echo "Pod ${namespace}/${name}: ${event}"
+}
+
+shell-op::on pod::handle -k v1/Pod -e Added -e Deleted
+shell-op::run "${@}"
+EOF
+chmod +x hooks/watch-pods.sh
+
+# Build and run
+docker build -t my-operator .
+```
+
 ## Structure
 
 ```text
 shell-op/
+├── Dockerfile          # base image with argsh + shell-op
 ├── README.md           # this file
 ├── argsh-plugin.yml    # metadata
 ├── shell-op            # bash library
-├── shell-op.bats       # tests
+├── shell-op.bats       # unit tests
+├── shell-op-e2e.bats   # e2e tests
 └── example             # example hook
 ```
 
