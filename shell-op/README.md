@@ -190,7 +190,7 @@ Handler function 'nonexistent::handler' is not declared
 
 ## Docker
 
-Pre-built base image with argsh + shell-op ready to go:
+Base image with argsh + shell-op pre-installed:
 
 ```dockerfile
 FROM flant/shell-operator:v1.14.3
@@ -198,39 +198,39 @@ FROM flant/shell-operator:v1.14.3
 RUN curl -sL https://min.arg.sh -o /usr/local/bin/argsh \
  && chmod +x /usr/local/bin/argsh \
  && argsh lib add shell-op
+```
 
+### Option 1: Bake hooks into the image
+
+```dockerfile
+FROM ghcr.io/arg-sh/libs/shell-op:latest
 COPY hooks/ /hooks/
 ```
 
-Just add your hooks and deploy:
+### Option 2: Mount hooks via ConfigMap (Kubernetes)
 
-```bash
-docker build -t my-operator .
-```
+Use the base image and mount hooks at runtime — ideal for GitOps workflows where hooks live alongside your manifests:
 
-Or use the provided `Dockerfile` directly:
+```yaml
+# kustomization.yaml
+configMapGenerator:
+- name: my-operator-hooks
+  files:
+  - hooks/watch-machines.sh
 
-```bash
-# Create hooks/
-mkdir -p hooks
-cat > hooks/watch-pods.sh << 'EOF'
-#!/usr/bin/env bash
-source argsh
-import shell-op
-
-pod::handle() {
-  local event name namespace
-  :args "Handle pods" "${@}"
-  echo "Pod ${namespace}/${name}: ${event}"
-}
-
-shell-op::on pod::handle -k v1/Pod -e Added -e Deleted
-shell-op::run "${@}"
-EOF
-chmod +x hooks/watch-pods.sh
-
-# Build and run
-docker build -t my-operator .
+# deployment.yaml
+spec:
+  containers:
+  - name: operator
+    image: ghcr.io/arg-sh/libs/shell-op:latest
+    volumeMounts:
+    - name: hooks
+      mountPath: /hooks
+  volumes:
+  - name: hooks
+    configMap:
+      name: my-operator-hooks
+      defaultMode: 0755
 ```
 
 ## Structure
