@@ -194,6 +194,8 @@ jobs:
           sudo chmod +x /usr/local/bin/argsh
 
       - name: Push OCI artifact
+        env:
+          ARGSH_BUILTIN_PATH: /usr/local/lib/argsh.so
         run: |
           lib="${{ needs.meta.outputs.lib }}"
           version="${{ needs.meta.outputs.version }}"
