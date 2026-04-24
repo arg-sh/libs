@@ -121,6 +121,20 @@ init::handler() { :; }
   [[ "$(echo "${config}" | jq -r '.kubernetes[0].executeHookOnEvent | length')" == "3" ]]
 }
 
+@test "on: --queue" {
+  shell-op::on pod::handle -k Pod -q slow
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].queue')" == "slow" ]]
+}
+
+@test "on: --resync" {
+  shell-op::on pod::handle -k Pod -r 1h
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.kubernetes[0].resynchronizationPeriod')" == "1h" ]]
+}
+
 # ── shell-op::cron ─────────────────────────────────────
 
 @test "cron: basic schedule" {
@@ -137,6 +151,27 @@ init::handler() { :; }
   local config
   config="$(shell-op::config)"
   [[ "$(echo "${config}" | jq -r '.schedule | length')" == "2" ]]
+}
+
+@test "cron: --queue" {
+  shell-op::cron "*/5 * * * *" cron::handle --queue slow
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.schedule[0].queue')" == "slow" ]]
+}
+
+@test "cron: --allow-failure" {
+  shell-op::cron "*/5 * * * *" cron::handle --allow-failure
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.schedule[0].allowFailure')" == "true" ]]
+}
+
+@test "cron: --include-snapshots" {
+  shell-op::cron "*/5 * * * *" cron::handle --include-snapshots pod::handle
+  local config
+  config="$(shell-op::config)"
+  [[ "$(echo "${config}" | jq -r '.schedule[0].includeSnapshotsFrom[0]')" == "pod::handle" ]]
 }
 
 @test "cron: missing args fails" {

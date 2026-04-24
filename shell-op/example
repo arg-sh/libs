@@ -5,45 +5,44 @@ set -euo pipefail
 
 import shell-op
 
-# args array is defined by the shell-op library
+# args array is defined by the shell-op library (per binding type)
 # we only define variables that we use
-# ctx contains the raw json from the binding context; user can use jaml to parse it
-# question: do we mix binding + type + watchEvent in the same variable -> yes
-# we expose .[0].* as local variables -> local type binding watchEvent (if user needs it diffirantiated.)
+# ctx contains the raw json from the binding context
 pod::handle() {
-  local event name namespace ctx # kind type 
+  local event name namespace ctx
   :args "Handle pod events" "${@}"
 
   case "${event}" in
-    # jq -r '.[0].binding' $BINDING_CONTEXT_PATH
-    "onStartup")
-      echo "Hook startup event"
-      ;;
-    # jq -r '.[0].type' $BINDING_CONTEXT_PATH
-    "Syncronization")
+    "Synchronization")
       echo "Pod ${namespace}/${name} was synced"
       ;;
-    # jq -r '.[0].watchEvent
     *)
       echo "Pod ${namespace}/${name} was ${event}"
       ;;
   esac
-
-  echo "ctx: ${ctx}"
 }
 
 cron::handle() {
-  local event name namespace # kind type 
+  local event binding
   :args "Handle cron events" "${@}"
 
-  echo "Cron ${namespace}/${name} was ${event}"
+  echo "Cron ${binding} fired: ${event}"
 }
 
-# can have multiple kinds and events
-# --no-sync will not sync the resource before calling the handler
-shell-op::on -k v1/pod -e Added -e Modified -e Deleted -f .metadata.name pod::handle
-shell-op::cron "*/5 * * * *" cron::handle
+startup::init() {
+  echo "Hook startup — initializing..."
+}
 
-# run the operator
-# argsh function with usage pattern (--config ... + registered on+cron as subcommands + help)
-shell-op::run "${@}"
+# can have multiple kinds and events (repeatable -k and -e)
+# --no-sync will skip Synchronization on startup
+shell-op::on pod::handle -k v1/Pod -e Added -e Modified -e Deleted -f .metadata.name
+# shell-op::on pod::handle -k Pod -k Service -e Added  # auto-groups multiple kinds
+# shell-op::on pod::handle -k Pod --queue slow --resync 1h
+
+shell-op::cron "*/5 * * * *" cron::handle
+# shell-op::cron "0 * * * *" cron::handle --queue slow --allow-failure
+# shell-op::cron "*/5 * * * *" cron::handle --include-snapshots pod::handle
+
+# --startup registers a script-level handler for onStartup events
+# --order controls execution order across multiple hooks (default: 1)
+shell-op::run --startup startup::init "${@}"

@@ -24,17 +24,19 @@ to::declared() {
 #   shell-op::on -k v1/Pod -e Added -e Modified -f .metadata.name pod::handle
 #   shell-op::on -k Pod -k Service -e Added pod::handle
 shell-op::on() {
-  local handler labels filter namespace group no_sync=0 path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
+  local handler labels filter namespace group queue resync no_sync=0 path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
   local -a kind=() event=() args=(
-    'handler:~declared'         "Handler function"
-    'kind|k:!'          "Resource kind, with optional apiVersion (v1/Pod, apps/v1/Deployment)"
-    'event|e'           "Watch event: Added, Modified, Deleted (repeatable)"
-    'labels|l'          "Label selector (key=val,...)"
-    'filter|f'          "jq filter expression"
-    'namespace|n'       "Namespace to watch"
-    'group|g'           "Group key for batching"
-    'no-sync:+'         "Skip Synchronization on startup"
-    'path_bindings|:^~file' "Path to bindings file"
+    'handler:~declared'      "Handler function"
+    'kind|k:!'               "Resource kind, with optional apiVersion (v1/Pod, apps/v1/Deployment)"
+    'event|e'                "Watch event: Added, Modified, Deleted (repeatable)"
+    'labels|l'               "Label selector (key=val,...)"
+    'filter|f'               "jq filter expression"
+    'namespace|n'            "Namespace to watch"
+    'group|g'                "Group key for batching"
+    'queue|q'                "Named queue for parallel execution"
+    'resync|r'               "Resynchronization period (e.g. 1h, 30m)"
+    'no-sync:+'              "Skip Synchronization on startup"
+    'path_bindings|:^~file'  "Path to bindings file"
     "${args[@]}"
   )
   :args "Register a Kubernetes watch binding" "${@}"
@@ -60,6 +62,8 @@ shell-op::on() {
     [[ -z "${filter:-}" ]]      || json+=',"jqFilter":"'"${filter}"'"'
     [[ -z "${namespace:-}" ]]   || json+=',"namespace":{"nameSelector":{"matchNames":["'"${namespace}"'"]}}'
     [[ -z "${group:-}" ]]       || json+=',"group":"'"${group}"'"'
+    [[ -z "${queue:-}" ]]       || json+=',"queue":"'"${queue}"'"'
+    [[ -z "${resync:-}" ]]      || json+=',"resynchronizationPeriod":"'"${resync}"'"'
 
     if (( no_sync )); then
       json+=',"executeHookOnSynchronization":false'
@@ -97,16 +101,25 @@ shell-op::on() {
 # @example
 #   shell-op::cron "*/5 * * * *" cron::handle
 shell-op::cron() {
-  local crontab handler path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
+  local crontab handler queue include_snapshots allow_failure=0 path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
   local -a args=(
-    'crontab:!' "Cron expression (5 or 6 fields)"
-    'handler:~declared' "Handler function"
-    'path_bindings|:^~file' "Path to bindings file"
+    'crontab:!'              "Cron expression (5 or 6 fields)"
+    'handler:~declared'      "Handler function"
+    'queue|q'                "Named queue for parallel execution"
+    'include-snapshots|i'    "Include snapshots from named k8s binding"
+    'allow-failure:+'        "Ignore hook execution errors"
+    'path_bindings|:^~file'  "Path to bindings file"
     "${args[@]}"
   )
   :args "Register a schedule binding" "${@}"
 
-  local json='{"name":"'"${handler}"'","crontab":"'"${crontab}"'"}'
+  local json='{"name":"'"${handler}"'","crontab":"'"${crontab}"'"'
+  [[ -z "${queue:-}" ]]             || json+=',"queue":"'"${queue}"'"'
+  [[ -z "${include_snapshots:-}" ]] || json+=',"includeSnapshotsFrom":["'"${include_snapshots}"'"]'
+  if (( allow_failure )); then
+    json+=',"allowFailure":true'
+  fi
+  json+='}'
   echo "schedule"$'\t'"${json}" >> "${path_bindings}"
 }
 
@@ -117,9 +130,9 @@ shell-op::cron() {
 shell-op::config() {
   local startup="${startup:-}" order="${order:-1}" path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
   local -a args=(
-    'startup|:^' "Startup handler function"
-    'order|:^~int' "Startup execution order"
-    'path_bindings|:^~file' "Path to bindings file"
+    'startup|:^'             "Startup handler function"
+    'order|:^~int'           "Startup execution order"
+    'path_bindings|:^~file'  "Path to bindings file"
   )
   :args "Generate --config JSON from registered bindings" "${@}"
 
@@ -171,9 +184,9 @@ shell-op::config() {
 shell-op::dispatch() {
   local index path_ctx="${path_ctx:-${BINDING_CONTEXT_PATH}}" path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
   local -a args=(
-    'index:!' 'Context index'
-    'path_ctx|:^~file' 'Path to binding context file'
-    'path_bindings|:^~file' 'Path to bindings file'
+    'index:!'                'Context index'
+    'path_ctx|:^~file'       'Path to binding context file'
+    'path_bindings|:^~file'  'Path to bindings file'
     "${args[@]}"
   )
   :args "Dispatch a single binding context entry to the right handler" "${@}"
@@ -252,13 +265,13 @@ shell-op::dispatch() {
 #   shell-op::on -k Pod -e Added pod::handle
 #   shell-op::run "${@}"
 shell-op::run() {
-  local startup order=1 config=0 path_ctx="${BINDING_CONTEXT_PATH:-}" path_bindings="${SHELLOP_BINDINGS:-}"
+  local startup order=1 config=0 path_ctx="${path_ctx:-${BINDING_CONTEXT_PATH:-}}" path_bindings="${path_bindings:-${SHELLOP_BINDINGS:-}}"
   local -a args=(
-    'startup|s:~declared' 'Startup handler function'
-    'order|o:~int' 'Startup execution order'
-    'config|:+' 'Print shell-operator config'
-    'path_ctx|:^~file' 'Path to binding context file'
-    'path_bindings|:^~file' 'Path to bindings file'
+    'startup|s:~declared'    'Startup handler function'
+    'order|o:~int'           'Startup execution order'
+    'config|:+'              'Print shell-operator config'
+    'path_ctx|:^~file'       'Path to binding context file'
+    'path_bindings|:^~file'  'Path to bindings file'
   )
   :args "Run shell-operator hook" "${@}"
 

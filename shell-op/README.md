@@ -46,11 +46,10 @@ import shell-op
 pod::handle() {
   local event name namespace
   :args "Handle pod events" "${@}"
-
   echo "Pod ${namespace}/${name} was ${event}"
 }
 
-shell-op::on -k v1/Pod -e Added -l "app=myapp" -f '.metadata.name' pod::handle
+shell-op::on pod::handle -k v1/Pod -e Added -l "app=myapp" -f '.metadata.name'
 shell-op::run "${@}"
 ```
 
@@ -62,33 +61,36 @@ Handlers are argsh functions — declare `local` for the fields you need, `:args
 
 ```bash
 # Single kind, multiple events
-shell-op::on -k v1/Pod -e Added -e Modified -e Deleted pod::handle
+shell-op::on pod::handle -k v1/Pod -e Added -e Modified -e Deleted
 
 # Multiple kinds — auto-groups under the handler name
-shell-op::on -k Pod -k Service -e Added mesh::handle
+shell-op::on mesh::handle -k Pod -k Service -e Added
 
 # Full options
-shell-op::on \
+shell-op::on deploy::handle \
   -k apps/v1/Deployment \
   -e Added -e Modified \
   -l "app=web,tier=frontend" \
   -f '.metadata.name' \
   -n production \
   -g my-group \
-  --no-sync \
-  deploy::handle
+  -q slow \
+  -r 1h \
+  --no-sync
 ```
 
-Flags are repeatable for `-k` (kind) and `-e` (event).
+Flags `-k` (kind) and `-e` (event) are repeatable.
 
 | Flag | Long | Description |
 |---|---|---|
-| `-k` | `--kind` | Resource kind, optionally with apiVersion (`v1/Pod`, `apps/v1/Deployment`) |
+| `-k` | `--kind` | Resource kind, with optional apiVersion (`v1/Pod`, `apps/v1/Deployment`) |
 | `-e` | `--event` | Watch event: `Added`, `Modified`, `Deleted` (repeatable) |
 | `-l` | `--labels` | Label selector (`key=val,...`) |
 | `-f` | `--filter` | jq filter expression |
 | `-n` | `--namespace` | Namespace to watch |
 | `-g` | `--group` | Group key for batching multiple bindings |
+| `-q` | `--queue` | Named queue for parallel execution |
+| `-r` | `--resync` | Resynchronization period (e.g. `1h`, `30m`) |
 | | `--no-sync` | Skip Synchronization on startup |
 
 ### Handler signature
@@ -97,7 +99,7 @@ Handlers receive positional args with a pre-defined `:args` array. Declare `loca
 
 ```bash
 pod::handle() {
-  local event kind name namespace type binding ctx
+  local event kind name namespace type binding watchEvent ctx
   :args "Handle pod events" "${@}"
 
   case "${event}" in
@@ -115,12 +117,13 @@ Available fields (in order):
 
 | Field | Description |
 |---|---|
-| `event` | Unified: watchEvent (`Added`/`Modified`/`Deleted`) or type (`Synchronization`/`Group`) or binding (`onStartup`) |
+| `event` | Unified: watchEvent (`Added`/`Modified`/`Deleted`) or type (`Synchronization`/`Group`) |
 | `kind` | Resource kind (`Pod`, `Service`, ...) |
-| `name` | `object.metadata.name` |
+| `name` | `object.metadata.name` (or `filterResult` if object is empty) |
 | `namespace` | `object.metadata.namespace` |
 | `type` | Raw context type (`Event`/`Synchronization`/`Group`) |
 | `binding` | Binding name |
+| `watchEvent` | Raw watch event (`Added`/`Modified`/`Deleted`) |
 | `ctx` | Full raw JSON binding context |
 
 ## Schedule bindings
@@ -129,8 +132,16 @@ Available fields (in order):
 
 ```bash
 shell-op::cron "*/5 * * * *" cron::tick
-shell-op::cron "0 * * * *" hourly::report
+shell-op::cron "0 * * * *" hourly::report --queue slow
+shell-op::cron "*/1 * * * *" fast::check --allow-failure
+shell-op::cron "*/5 * * * *" snap::check --include-snapshots pod::handle
 ```
+
+| Flag | Long | Description |
+|---|---|---|
+| `-q` | `--queue` | Named queue for parallel execution |
+| `-i` | `--include-snapshots` | Include snapshots from a named k8s binding |
+| | `--allow-failure` | Ignore hook execution errors |
 
 Cron handlers receive: `event` (`Schedule`), `binding`, `ctx`.
 
@@ -144,32 +155,37 @@ cron::tick() {
 
 ## Startup
 
-### `shell-op::startup` — run at operator start
+### `shell-op::run --startup` — run at operator start
 
 ```bash
-shell-op::startup my::init      # order 1 (default)
-shell-op::startup my::init 10   # custom order
+shell-op::run --startup my::init "${@}"         # order 1 (default)
+shell-op::run --startup my::init --order 10 "${@}"  # custom order
 ```
 
-The handler receives `event` = `onStartup`.
+`onStartup` is a script-level event — the handler is called once when the operator starts, before any k8s events flow. The order controls execution sequence across multiple hook scripts in the same operator.
 
 ## Entry point
 
-### `shell-op::run` — auto-dispatcher
+### `shell-op::run` — main dispatcher
 
 ```bash
 shell-op::run "${@}"
 ```
 
-Handles `--config` automatically (generates shell-operator JSON config from registered bindings), then dispatches each binding context entry to the matching handler.
+Handles `--config` automatically (generates shell-operator JSON config from registered bindings), dispatches `onStartup` to the startup handler, and routes each binding context entry to the matching handler.
 
-## CLI
+| Flag | Long | Description |
+|---|---|---|
+| `-s` | `--startup` | Startup handler function |
+| `-o` | `--order` | Startup execution order (default: 1) |
+| | `--config` | Print shell-operator config (called by shell-operator) |
 
-### `shell-op init` — scaffold a new hook
+## Handler validation
 
-```bash
-argsh run shell-op init --name my-hook
-# Creates hooks/my-hook.sh with a ready-to-use template
+Handler functions are validated at registration time using the `to::declared` custom type. If a handler function doesn't exist, registration fails immediately with an error:
+
+```
+Handler function 'nonexistent::handler' is not declared
 ```
 
 ## Structure
@@ -178,8 +194,8 @@ argsh run shell-op init --name my-hook
 shell-op/
 ├── README.md           # this file
 ├── argsh-plugin.yml    # metadata
-├── shell-op            # bash library + CLI executable
-├── shell-op.bats       # tests (29 tests)
+├── shell-op            # bash library
+├── shell-op.bats       # tests
 └── example             # example hook
 ```
 
