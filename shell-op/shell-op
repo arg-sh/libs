@@ -184,7 +184,7 @@ shell-op::config() {
 shell-op::dispatch() {
   local index path_ctx="${path_ctx:-${BINDING_CONTEXT_PATH}}" path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
   local -a args=(
-    'index:!'                'Context index'
+    'index|i:!'              'Context index'
     'path_ctx|:^~file'       'Path to binding context file'
     'path_bindings|:^~file'  'Path to bindings file'
     "${args[@]}"
@@ -289,7 +289,7 @@ shell-op::run() {
   local count i
   count="$(jq -r 'length' "${path_ctx}")"
   for (( i=0; i < count; i++ )); do
-    shell-op::dispatch "${i}"
+    shell-op::dispatch --index "${i}"
   done
 }
 
