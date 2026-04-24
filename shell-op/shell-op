@@ -6,7 +6,6 @@
 #   Wraps flant/shell-operator hook boilerplate into clean argsh functions.
 #   Declare bindings, route events to handlers, access context via :args.
 #
-#   Executable: argsh run shell-op init my-hook
 #   Library:    import shell-op
 
 : "${SHELLOP_BINDINGS:="$(mktemp)"}"
@@ -53,7 +52,7 @@ shell-op::on() {
     [[ -z "${namespace:-}" ]]   || _json+=',"namespace":{"nameSelector":{"matchNames":["'"${namespace}"'"]}}'
     [[ -z "${group:-}" ]]       || _json+=',"group":"'"${group}"'"'
 
-    if [[ -n "${no_sync:-}" ]]; then
+    if (( no_sync )); then
       _json+=',"executeHookOnSynchronization":false'
     fi
 
@@ -98,9 +97,7 @@ shell-op::cron() {
   )
   :args "Register a schedule binding" "${@}"
 
-  local _json
-  
-  _json='{"name":"'"${handler}"'","crontab":"'"${crontab}"'"}'
+  local _json='{"name":"'"${handler}"'","crontab":"'"${crontab}"'"}'
   echo "schedule"$'\t'"${handler}"$'\t'"${_json}" >> "${path_bindings}"
 }
 
@@ -118,7 +115,6 @@ shell-op::startup() {
   )
   :args "Register a startup handler" "${@}"
 
-  
   echo "startup"$'\t'"${handler}"$'\t'"${order:-1}" >> "${path_bindings}"
 }
 
@@ -140,7 +136,7 @@ shell-op::config() {
   local startup_order=""
 
   if [[ -s "${path_bindings}" ]]; then
-    local _line _type _handler _data
+    local _type _handler _data
     while IFS=$'\t' read -r _type _handler _data; do
       case "${_type}" in
         kubernetes) k8s+=("${_data}") ;;
@@ -229,7 +225,6 @@ shell-op::dispatch() {
 
     # Startup handler
     if [[ -z "${_handler}" && "${binding}" == "onStartup" ]]; then
-      local _etype _ehandler _edata
       while IFS=$'\t' read -r _etype _ehandler _edata; do
         if [[ "${_etype}" == "startup" ]]; then
           _handler="${_ehandler}"
@@ -282,7 +277,7 @@ shell-op::dispatch() {
 #   shell-op::on -k Pod -e Added pod::handle
 #   shell-op::run "${@}"
 shell-op::run() {
-  local config path_ctx="${BINDING_CONTEXT_PATH:-}" path_bindings="${SHELLOP_BINDINGS:-}"
+  local config=0 path_ctx="${BINDING_CONTEXT_PATH:-}" path_bindings="${SHELLOP_BINDINGS:-}"
   local -a args=(
     'config|:+' 'Print shell-operator config'
     'path_ctx|:^~file' 'Path to binding context file'
