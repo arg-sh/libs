@@ -185,56 +185,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install argsh
+        run: |
+          id=$(docker create ghcr.io/arg-sh/argsh:latest)
+          sudo docker cp "${id}:/usr/local/bin/argsh" /usr/local/bin/argsh
+          docker rm "${id}"
+          sudo chmod +x /usr/local/bin/argsh
+
       - name: Push OCI artifact
         run: |
           lib="${{ needs.meta.outputs.lib }}"
           version="${{ needs.meta.outputs.version }}"
-          ref="${{ env.REGISTRY }}/${lib}:${version}"
-          ref_latest="${{ env.REGISTRY }}/${lib}:latest"
 
-          # Use ORAS to push each file as a separate layer
-          # Install oras CLI
-          curl -sL https://github.com/oras-project/oras/releases/download/v1.2.2/oras_1.2.2_linux_amd64.tar.gz \
-            | tar xz -C /usr/local/bin oras
-
-          # Build the push command with typed layers.
-          # Run from inside bundle/ so oras uses bare filenames (not bundle/foo)
-          # in the org.opencontainers.image.title annotation.
-          pushd bundle > /dev/null
-          pushargs=()
-          for f in *; do
-            [[ -f "${f}" ]] || continue
-            case "${f}" in
-              *.sh|*.bash)
-                pushargs+=("${f}:application/vnd.argsh.lib.v1+bash")
-                ;;
-              *.yml|*.yaml)
-                pushargs+=("${f}:application/vnd.argsh.plugin.v1+yaml")
-                ;;
-              *.so)
-                pushargs+=("${f}:application/vnd.argsh.builtin.v1+so")
-                ;;
-              *.bats)
-                pushargs+=("${f}:application/vnd.argsh.test.v1+bats")
-                ;;
-              sha256sum.txt)
-                continue
-                ;;
-              *)
-                pushargs+=("${f}:application/vnd.argsh.lib.v1+bash")
-                ;;
-            esac
-          done
-
-          echo "Pushing ${ref}..."
-          oras push "${ref}" "${pushargs[@]}"
-          popd > /dev/null
-
-          echo "Tagging ${ref_latest}..."
-          oras tag "${ref}" "${version}" "latest"
-
-          echo "=== Manifest ==="
-          oras manifest fetch "${ref}" | jq .
+          cd bundle
+          argsh lib publish --registry "${{ env.REGISTRY }}"
 
       - name: Check if lib has a Dockerfile
         id: docker
