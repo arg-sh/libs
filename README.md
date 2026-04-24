@@ -45,7 +45,8 @@ Libraries install to `.argsh/libs/` (project-local) or `~/.local/share/argsh/lib
 
 | Library | Description | Version | Builtin |
 |---------|-------------|---------|---------|
-| [`jaml`](jaml/) | Structured data access for YAML/JSON — batch read/write, array iteration, template rendering | 0.1.0 | [`libjaml.so`](jaml/builtin/) |
+| [`jaml`](jaml/) | Structured data access for YAML/JSON — batch read/write, array iteration, template rendering | 0.1.1 | [`libjaml.so`](jaml/builtin/) |
+| [`shell-op`](shell-op/) | Declarative [shell-operator](https://github.com/flant/shell-operator) hooks — typed bindings, event dispatch, config generation | 0.1.0 | — |
 
 &nbsp;
 
