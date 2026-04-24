@@ -257,6 +257,6 @@ jobs:
           context: ${{ needs.meta.outputs.lib }}
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ needs.meta.outputs.lib }}:${{ needs.meta.outputs.version }}
-            ${{ env.REGISTRY }}/${{ needs.meta.outputs.lib }}:latest
+            ghcr.io/arg-sh/${{ needs.meta.outputs.lib }}:${{ needs.meta.outputs.version }}
+            ghcr.io/arg-sh/${{ needs.meta.outputs.lib }}:latest
           platforms: linux/amd64,linux/arm64
