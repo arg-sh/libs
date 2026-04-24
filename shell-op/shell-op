@@ -10,6 +10,11 @@
 
 : "${SHELLOP_BINDINGS:="$(mktemp)"}"
 
+to::declared() {
+  declare -f "${1:-}" &>/dev/null || return 1
+  echo "${1}"
+}
+
 # @description Register a Kubernetes watch binding.
 # @example
 #   shell-op::on -k v1/Pod -e Added -e Modified -f .metadata.name pod::handle
@@ -17,7 +22,7 @@
 shell-op::on() {
   local handler labels filter namespace group no_sync=0 path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
   local -a kind=() event=() args=(
-    'handler:!'         "Handler function"
+    'handler:~declared'         "Handler function"
     'kind|k:!'          "Resource kind, with optional apiVersion (v1/Pod, apps/v1/Deployment)"
     'event|e'           "Watch event: Added, Modified, Deleted (repeatable)"
     'labels|l'          "Label selector (key=val,...)"
@@ -80,7 +85,7 @@ shell-op::on() {
     fi
 
     json+='}'
-    echo "kubernetes"$'\t'"${handler}"$'\t'"${json}" >> "${path_bindings}"
+    echo "kubernetes"$'\t'"${json}" >> "${path_bindings}"
   done
 }
 
@@ -91,31 +96,14 @@ shell-op::cron() {
   local crontab handler path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
   local -a args=(
     'crontab:!' "Cron expression (5 or 6 fields)"
-    'handler:!' "Handler function"
+    'handler:~declared' "Handler function"
     'path_bindings|:^~file' "Path to bindings file"
     "${args[@]}"
   )
   :args "Register a schedule binding" "${@}"
 
   local json='{"name":"'"${handler}"'","crontab":"'"${crontab}"'"}'
-  echo "schedule"$'\t'"${handler}"$'\t'"${json}" >> "${path_bindings}"
-}
-
-# @description Register a startup handler.
-# @example
-#   shell-op::startup my::init
-#   shell-op::startup my::init --order 10
-shell-op::startup() {
-  local handler order path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
-  local -a args=(
-    'handler:!' "Handler function"
-    'order|o'   "Execution order (default: 1)"
-    'path_bindings|:^~file' "Path to bindings file"
-    "${args[@]}"
-  )
-  :args "Register a startup handler" "${@}"
-
-  echo "startup"$'\t'"${handler}"$'\t'"${order:-1}" >> "${path_bindings}"
+  echo "schedule"$'\t'"${json}" >> "${path_bindings}"
 }
 
 # shellcheck disable=SC2120
@@ -123,31 +111,31 @@ shell-op::startup() {
 # @stdout JSON config for shell-operator
 # @internal
 shell-op::config() {
-  local path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
+  local startup="${startup:-}" order="${order:-1}" path_bindings="${path_bindings:-${SHELLOP_BINDINGS}}"
   local -a args=(
+    'startup|:^' "Startup handler function"
+    'order|:^' "Startup execution order"
     'path_bindings|:^~file' "Path to bindings file"
   )
   :args "Generate --config JSON from registered bindings" "${@}"
 
   local out='{"configVersion":"v1"'
 
+  if [ -n "${startup}" ]; then
+    out+=',"onStartup":'"${order}"
+  fi
+
   # Collect entries by type
   local -a k8s=() sched=()
-  local startup_order=""
 
   if [[ -s "${path_bindings}" ]]; then
-    local btype bhandler bdata
-    while IFS=$'\t' read -r btype bhandler bdata; do
+    local btype bdata
+    while IFS=$'\t' read -r btype bdata; do
       case "${btype}" in
         kubernetes) k8s+=("${bdata}") ;;
         schedule)   sched+=("${bdata}") ;;
-        startup)    startup_order="${bdata}" ;;
       esac
     done < "${path_bindings}"
-  fi
-
-  if [[ -n "${startup_order}" ]]; then
-    out+=',"onStartup":'"${startup_order}"
   fi
 
   local json
@@ -209,34 +197,21 @@ shell-op::dispatch() {
   binding="$(jq -r '.binding // empty' <<< "${ctx}")"
   watchEvent="$(jq -r '.watchEvent // empty' <<< "${ctx}")"
 
-  # Unified event: watchEvent > type > binding
-  event="${watchEvent:-${type:-${binding}}}"
+  # Unified event: watchEvent > type
+  event="${watchEvent:-${type}}"
 
-  # Find handler by binding name
-  local _handler="" _entry_type="" _etype _ehandler _edata
+  # Find handler and entry type by binding name
+  local _handler="" _entry_type="" _etype _edata
   if [[ -s "${path_bindings}" ]]; then
-    while IFS=$'\t' read -r _etype _ehandler _edata; do
-      if [[ "${_ehandler}" == "${binding}" ]]; then
-        _handler="${_ehandler}"
+    while IFS=$'\t' read -r _etype _edata; do
+      if [[ "${_edata}" == *"\"name\":\"${binding}\""* ]]; then
+        _handler="${binding}"
         _entry_type="${_etype}"
         break
       fi
     done < "${path_bindings}"
-
-    # Startup handler
-    if [[ -z "${_handler}" && "${binding}" == "onStartup" ]]; then
-      while IFS=$'\t' read -r _etype _ehandler _edata; do
-        if [[ "${_etype}" == "startup" ]]; then
-          _handler="${_ehandler}"
-          _entry_type="startup"
-          break
-        fi
-      done < "${path_bindings}"
-      event="onStartup"
-    fi
   fi
 
-  # Handler does not match any binding, skip
   [[ -n "${_handler}" ]] || {
     return 0
   }
@@ -264,10 +239,6 @@ shell-op::dispatch() {
       local -a args=("${SHELLOP_CRON_ARGS[@]}")
       "${_handler}" "${event}" "${binding}" "${ctx}"
       ;;
-    *)
-      local -a args=("${SHELLOP_K8S_ARGS[@]}")
-      "${_handler}" "${event}" "" "" "" "${type}" "${binding}" "${watchEvent}" "${ctx}"
-      ;;
   esac
 }
 
@@ -277,24 +248,31 @@ shell-op::dispatch() {
 #   shell-op::on -k Pod -e Added pod::handle
 #   shell-op::run "${@}"
 shell-op::run() {
-  local config=0 path_ctx="${BINDING_CONTEXT_PATH:-}" path_bindings="${SHELLOP_BINDINGS:-}"
+  local startup order=1 config=0 path_ctx="${BINDING_CONTEXT_PATH:-}" path_bindings="${SHELLOP_BINDINGS:-}"
   local -a args=(
+    'startup|s:~declared' 'Startup handler function'
+    'order|o:~int' 'Startup execution order'
     'config|:+' 'Print shell-operator config'
     'path_ctx|:^~file' 'Path to binding context file'
     'path_bindings|:^~file' 'Path to bindings file'
   )
   :args "Run shell-operator hook" "${@}"
-  
+
   if (( config )); then
     shell-op::config
     return 0
   fi
 
+  # onStartup: singular script-level call, not dispatched to handlers
+  if jq -e '.[0].binding == "onStartup"' "${path_ctx}" &>/dev/null; then
+    [[ -z "${startup:-}" ]] || "${startup}"
+    return 0
+  fi
+  
   local count i
   count="$(jq -r 'length' "${path_ctx}")"
-
   for (( i=0; i < count; i++ )); do
-    shell-op::dispatch --index "${i}"
+    shell-op::dispatch "${i}"
   done
 }
 

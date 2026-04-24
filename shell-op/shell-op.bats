@@ -3,7 +3,6 @@
 
 setup() {
   source argsh
-  # Fresh bindings file per test
   SHELLOP_BINDINGS="$(mktemp)"
   export SHELLOP_BINDINGS
   source "${BATS_TEST_DIRNAME}/shell-op"
@@ -14,6 +13,15 @@ teardown() {
   rm -rf "${_tmp}"
   rm -f "${SHELLOP_BINDINGS}"
 }
+
+# stub handlers for registration (to::declared validation)
+pod::handle() { :; }
+deploy::handle() { :; }
+mesh::handle() { :; }
+cron::handle() { :; }
+fast::tick() { :; }
+slow::tick() { :; }
+init::handler() { :; }
 
 # ── shell-op::on ───────────────────────────────────────
 
@@ -94,6 +102,11 @@ teardown() {
   [[ "${status}" -ne 0 ]]
 }
 
+@test "on: undeclared handler fails" {
+  run shell-op::on nonexistent::handler -k Pod
+  [[ "${status}" -ne 0 ]]
+}
+
 @test "on: --help shows usage" {
   run shell-op::on --help
   [[ "${status}" -eq 0 ]]
@@ -131,32 +144,40 @@ teardown() {
   [[ "${status}" -ne 0 ]]
 }
 
+@test "cron: undeclared handler fails" {
+  run shell-op::cron "*/5 * * * *" nonexistent::handler
+  [[ "${status}" -ne 0 ]]
+}
+
 @test "cron: --help shows usage" {
   run shell-op::cron --help
   [[ "${status}" -eq 0 ]]
   [[ "${output}" == *"Register a schedule binding"* ]]
 }
 
-# ── shell-op::startup ─────────────────────────────────
+# ── startup (via shell-op::run) ───────────────────────
 
-@test "startup: registers handler" {
-  shell-op::startup my::init
+@test "startup: --startup in config" {
   local config
-  config="$(shell-op::config)"
+  config="$(shell-op::run --config --startup init::handler)"
   [[ "$(echo "${config}" | jq -r '.onStartup')" == "1" ]]
 }
 
 @test "startup: custom order" {
-  shell-op::startup my::init --order 10
   local config
-  config="$(shell-op::config)"
+  config="$(shell-op::run --config --startup init::handler --order 10)"
   [[ "$(echo "${config}" | jq -r '.onStartup')" == "10" ]]
 }
 
-@test "startup: --help shows usage" {
-  run shell-op::startup --help
-  [[ "${status}" -eq 0 ]]
-  [[ "${output}" == *"Register a startup handler"* ]]
+@test "startup: no --startup means no onStartup in config" {
+  local config
+  config="$(shell-op::run --config)"
+  [[ "$(echo "${config}" | jq 'has("onStartup")')" == "false" ]]
+}
+
+@test "startup: undeclared handler fails" {
+  run shell-op::run --config --startup nonexistent::handler
+  [[ "${status}" -ne 0 ]]
 }
 
 # ── shell-op::config ──────────────────────────────────
@@ -171,12 +192,11 @@ teardown() {
 }
 
 @test "config: combined bindings" {
-  shell-op::startup init::handler
   shell-op::cron "*/5 * * * *" cron::handle
   shell-op::on pod::handle -k Pod -e Added
 
   local config
-  config="$(shell-op::config)"
+  config="$(shell-op::run --config --startup init::handler)"
   [[ "$(echo "${config}" | jq 'has("onStartup")')" == "true" ]]
   [[ "$(echo "${config}" | jq 'has("schedule")')" == "true" ]]
   [[ "$(echo "${config}" | jq 'has("kubernetes")')" == "true" ]]
@@ -230,23 +250,30 @@ JSON
   [[ "${_result}" == "Schedule:cron::handle" ]]
 }
 
-@test "run: dispatches startup to handler" {
+@test "run: startup calls handler" {
   cat > "${_tmp}/ctx.json" << 'JSON'
-[{"type":"","binding":"onStartup"}]
+[{"binding":"onStartup"}]
 JSON
   BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
 
   _result=""
-  init::handler() {
-    local event
-    :args "test" "${@}"
-    _result="${event}"
-  }
+  init::handler() { _result="started"; }
 
-  shell-op::startup init::handler
+  shell-op::run --startup init::handler
+
+  [[ "${_result}" == "started" ]]
+}
+
+@test "run: startup without --startup is noop" {
+  cat > "${_tmp}/ctx.json" << 'JSON'
+[{"binding":"onStartup"}]
+JSON
+  BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
+
+  _result="untouched"
   shell-op::run
 
-  [[ "${_result}" == "onStartup" ]]
+  [[ "${_result}" == "untouched" ]]
 }
 
 @test "run: unified event prefers watchEvent over type" {
@@ -317,7 +344,6 @@ JSON
 
   _call_count=0
   pod::handle() {
-    :args "test" "${@}"
     _call_count=$(( _call_count + 1 ))
   }
 
