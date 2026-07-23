@@ -172,11 +172,18 @@ jobs:
           sha256sum * > sha256sum.txt
           cd ..
 
-          gh release create "${tag}" \
-            --title "${lib} v${version}" \
-            --generate-notes \
-            "${lib}-${version}.tar.gz" \
-            bundle/sha256sum.txt
+          # Idempotent: a prior failed run (or a re-tag) may have already created
+          # this release — upload/clobber the assets instead of erroring out.
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" \
+              "${lib}-${version}.tar.gz" bundle/sha256sum.txt --clobber
+          else
+            gh release create "${tag}" \
+              --title "${lib} v${version}" \
+              --generate-notes \
+              "${lib}-${version}.tar.gz" \
+              bundle/sha256sum.txt
+          fi
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -193,15 +200,20 @@ jobs:
           docker rm "${id}"
           sudo chmod +x /usr/local/bin/argsh
 
-      - name: Push OCI artifact
+      # Best-effort: publishing the bash lib as an OCI artifact (for `argsh add`)
+      # is INDEPENDENT of the Docker image below, which is what the platform
+      # actually consumes (kubehz-op-cegp bases on the image, not the OCI lib).
+      # So a lib-push hiccup must NOT block the image — continue-on-error keeps
+      # it best-effort (surfaced as a job warning). The command is `argsh
+      # publish` (top-level), not `argsh lib publish`, and it reads the version
+      # from argsh-plugin.yml (kept in lockstep with the tag).
+      - name: Push OCI artifact (best-effort)
+        continue-on-error: true
         env:
           ARGSH_BUILTIN_PATH: /usr/local/lib/argsh.so
         run: |
-          lib="${{ needs.meta.outputs.lib }}"
-          version="${{ needs.meta.outputs.version }}"
-
           cd bundle
-          argsh lib publish --registry "${{ env.REGISTRY }}"
+          argsh publish --registry "${{ env.REGISTRY }}"
 
       - name: Check if lib has a Dockerfile
         id: docker
