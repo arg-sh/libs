@@ -288,8 +288,18 @@ shell-op::run() {
   
   local count i
   count="$(jq -r 'length' "${path_ctx}")"
+  # shell-op::dispatch loads the matched binding's arg spec into `args`
+  # (SHELLOP_K8S_ARGS / SHELLOP_CRON_ARGS) so the handler's `:args` can parse the
+  # positional context; via argsh's inherited-args machinery that spec leaks back
+  # up into THIS function's `args`. On a BATCHED invocation (>1 context entry in
+  # one hook run) the next iteration's dispatch would then inherit the handler
+  # spec and abort with "missing required argument: event". So snapshot our own
+  # spec and restore it after every dispatch — dispatch stays in-process (handlers
+  # can still set caller-visible state), we just undo the leak between entries.
+  local -a _run_args=("${args[@]}")
   for (( i=0; i < count; i++ )); do
     shell-op::dispatch --index "${i}"
+    args=("${_run_args[@]}")
   done
 }
 

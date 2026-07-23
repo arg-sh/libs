@@ -388,6 +388,33 @@ JSON
   [[ "${_call_count}" == "2" ]]
 }
 
+@test "run: batched entries each dispatch when the handler uses :args (regression)" {
+  # A handler that calls :args triggers argsh's inherited-args dedup, which used to
+  # leak the per-binding arg spec back into shell-op::run's `args`. On a batched
+  # context (>1 entry) the SECOND dispatch then inherited that spec and aborted with
+  # "missing required argument: event". Both entries must dispatch and :args must
+  # see each event.
+  cat > "${_tmp}/ctx.json" << 'JSON'
+[
+  {"type":"Event","binding":"pod::handle","watchEvent":"Added","object":{"kind":"Pod","metadata":{"name":"a","namespace":"ns"}}},
+  {"type":"Event","binding":"pod::handle","watchEvent":"Modified","object":{"kind":"Pod","metadata":{"name":"b","namespace":"ns"}}}
+]
+JSON
+  BINDING_CONTEXT_PATH="${_tmp}/ctx.json"
+
+  _events=""
+  pod::handle() {
+    local event name namespace
+    :args "test" "${@}"
+    _events="${_events}${event}:${name} "
+  }
+
+  shell-op::on pod::handle -k Pod -e Added -e Modified
+  shell-op::run
+
+  [[ "${_events}" == "Added:a Modified:b " ]]
+}
+
 @test "run: handler receives watchEvent separately" {
   cat > "${_tmp}/ctx.json" << 'JSON'
 [{"type":"Event","binding":"pod::handle","watchEvent":"Deleted","object":{"kind":"Pod","metadata":{"name":"nginx","namespace":"default"}}}]
