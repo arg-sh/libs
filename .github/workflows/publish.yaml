@@ -217,6 +217,10 @@ jobs:
         if: steps.docker.outputs.has_dockerfile == 'true'
         uses: docker/setup-buildx-action@v3
 
+      # Image path MUST be ${REGISTRY}/${lib} (ghcr.io/arg-sh/libs/<lib>) — the
+      # SAME namespace as the OCI lib artifact above. The bare ghcr.io/arg-sh/<lib>
+      # used before dropped the `libs/` segment, so the image landed at a path
+      # nothing pulls FROM (kubehz-op-cegp bases on ghcr.io/arg-sh/libs/shell-op).
       - name: Build and push Docker image
         if: steps.docker.outputs.has_dockerfile == 'true'
         uses: docker/build-push-action@v6
@@ -224,6 +228,6 @@ jobs:
           context: ${{ needs.meta.outputs.lib }}
           push: true
           tags: |
-            ghcr.io/arg-sh/${{ needs.meta.outputs.lib }}:${{ needs.meta.outputs.version }}
-            ghcr.io/arg-sh/${{ needs.meta.outputs.lib }}:latest
+            ${{ env.REGISTRY }}/${{ needs.meta.outputs.lib }}:${{ needs.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ needs.meta.outputs.lib }}:latest
           platforms: linux/amd64,linux/arm64
